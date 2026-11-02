@@ -1,13 +1,13 @@
 # Security controls and limits
 
-**Audit date:** 2026-11-01
+**Audit date:** 2026-11-02
 
 ## Implemented controls
 
 - Application API permissions are based on explicit Admin/Viewer roles;
   `is_staff` alone does not grant application access.
-- Admin sign-in requires Google Authenticator TOTP. Viewer sign-in does not
-  require OTP. Seeds are encrypted with a configured Fernet key, OTP replay is
+- Admin and Viewer sign-in require Google Authenticator TOTP. Seeds are encrypted
+  with a configured Fernet key, OTP replay is
   checked, recovery codes are stored as hashes and consumed once, and login
   challenges are rate limited.
 - Browser sign-in is CSRF protected. Passwords use Django password hashers,
@@ -32,7 +32,7 @@
 ## Important operating requirements
 
 - Set stable, private `DJANGO_SECRET_KEY` and `TOTP_ENCRYPTION_KEY` values in
-  the ignored `.env` file before Admin enrollment. Losing the TOTP encryption
+  the ignored `.env` file before account enrollment. Losing the TOTP encryption
   key prevents enrolled seeds from being decrypted.
 - The local HTTP setup is intended for development on loopback. Keep the local
   `.env` file private and outside Git.

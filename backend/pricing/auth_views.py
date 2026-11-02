@@ -26,13 +26,14 @@ from rest_framework.response import Response
 
 from .models import AdminOTPDevice, AuditEvent, DrugUnitReview, ReportRecord
 from .otp import decrypt_secret, encrypt_secret, new_secret, provisioning_uri, verify_code
-from .permissions import ADMIN_GROUP, VIEWER_GROUP, CanAdminister, has_any_role
+from .permissions import (ADMIN_GROUP, VIEWER_GROUP, APPLICATION_ROLES, SUPER_ADMIN_GROUP,
+                         CLIENT_GROUP, REVIEWER_GROUP, CanAdminister, CanReview, has_any_role)
 
 
 def _role_names(user):
     if user.is_superuser:
-        return [ADMIN_GROUP]
-    return sorted(user.groups.filter(name__in=(ADMIN_GROUP, VIEWER_GROUP))
+        return [SUPER_ADMIN_GROUP]
+    return sorted(user.groups.filter(name__in=(*APPLICATION_ROLES, ADMIN_GROUP, VIEWER_GROUP))
                   .values_list("name", flat=True))
 
 
@@ -100,34 +101,27 @@ def login_view(request):
                   timeout=max(1, int(expires_at - now)))
         AuditEvent.objects.create(action="login_failed", entity_type="user", entity_id=username[:120])
         return Response({"error": "Invalid username or password."}, status=401)
-    if not has_any_role(user, {ADMIN_GROUP, VIEWER_GROUP}):
+    if not has_any_role(user, set(APPLICATION_ROLES) | {ADMIN_GROUP, VIEWER_GROUP}):
         AuditEvent.objects.create(actor=user, action="login_no_role", entity_type="user", entity_id=str(user.pk))
         return Response({"error": "This account has no application role."}, status=403)
     cache.delete(key)
-    if has_any_role(user, {ADMIN_GROUP}):
-        device = AdminOTPDevice.objects.filter(user=user, enabled=True).first()
-        if not device:
-            challenge = signing.dumps({"user_id": user.pk, "purpose": "enroll"}, salt="user-otp-login")
-            AuditEvent.objects.create(actor=user, action="otp_enrollment_required", entity_type="user",
-                                      entity_id=str(user.pk))
-            return Response({"otp_setup_required": True, "challenge": challenge, "expires_in": 600})
-        challenge = signing.dumps({"user_id": user.pk, "purpose": "login"}, salt="user-otp-login")
-        AuditEvent.objects.create(actor=user, action="otp_challenge_issued", entity_type="user",
+    device = AdminOTPDevice.objects.filter(user=user, enabled=True).first()
+    if not device:
+        challenge = signing.dumps({"user_id": user.pk, "purpose": "enroll"}, salt="user-otp-login")
+        AuditEvent.objects.create(actor=user, action="otp_enrollment_required", entity_type="user",
                                   entity_id=str(user.pk))
-        return Response({"otp_required": True, "challenge": challenge, "expires_in": 300})
-
-    login(request, user)
-    AuditEvent.objects.create(actor=user, action="login_succeeded", entity_type="user", entity_id=str(user.pk))
-    return Response({"user": _user_payload(user), "access": _access_token(user),
-                     "token_type": "Bearer", "expires_in": settings.JWT_ACCESS_TOKEN_SECONDS})
+        return Response({"otp_setup_required": True, "challenge": challenge, "expires_in": 600})
+    challenge = signing.dumps({"user_id": user.pk, "purpose": "login"}, salt="user-otp-login")
+    AuditEvent.objects.create(actor=user, action="otp_challenge_issued", entity_type="user",
+                              entity_id=str(user.pk))
+    return Response({"otp_required": True, "challenge": challenge, "expires_in": 300})
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def admin_otp_status(request):
-    if not has_any_role(request.user, {ADMIN_GROUP}):
-        return Response({"applicable": False, "enabled": False, "setup_pending": False,
-                         "recovery_codes_remaining": 0})
+    if not has_any_role(request.user, set(APPLICATION_ROLES) | {ADMIN_GROUP, VIEWER_GROUP}):
+        return Response({"error": "This account has no application role."}, status=403)
     device = AdminOTPDevice.objects.filter(user=request.user).first()
     return Response({"applicable": True, "enabled": bool(device and device.enabled),
                      "setup_pending": bool(device and not device.enabled),
@@ -143,8 +137,8 @@ def admin_otp_setup(request):
         request.data.get("challenge"), "enroll")
     if not user:
         return Response({"error": "This authenticator setup challenge expired. Sign in again."}, status=401)
-    if not has_any_role(user, {ADMIN_GROUP}):
-        return Response({"error": "Authenticator enrollment is required only for Admin accounts."}, status=403)
+    if not has_any_role(user, set(APPLICATION_ROLES) | {ADMIN_GROUP, VIEWER_GROUP}):
+        return Response({"error": "This account has no application role."}, status=403)
     device = AdminOTPDevice.objects.filter(user=user).first()
     if device and device.enabled:
         return Response({"error": "Authenticator OTP is already enabled for this account."}, status=409)
@@ -176,6 +170,8 @@ def admin_otp_confirm(request):
         request.data.get("challenge"), "enroll")
     if not user:
         return Response({"error": "This authenticator setup challenge expired. Sign in again."}, status=401)
+    if not has_any_role(user, set(APPLICATION_ROLES) | {ADMIN_GROUP, VIEWER_GROUP}):
+        return Response({"error": "This account has no application role."}, status=403)
     challenge = str(request.data.get("challenge", ""))
     ip = request.META.get("REMOTE_ADDR", "unknown")
     attempt_key = "otp-enroll-fail:" + hashlib.sha256(
@@ -245,7 +241,7 @@ def complete_otp_login(request):
     if payload.get("purpose") != "login":
         return Response({"error": "This sign-in challenge is invalid. Enter your password again."}, status=401)
     user = get_user_model().objects.filter(pk=payload.get("user_id"), is_active=True).first()
-    if not user or not has_any_role(user, {ADMIN_GROUP}):
+    if not user or not has_any_role(user, set(APPLICATION_ROLES) | {ADMIN_GROUP, VIEWER_GROUP}):
         return Response({"error": "This authenticator sign-in is no longer valid. Enter your password again."}, status=401)
     with transaction.atomic():
         device = AdminOTPDevice.objects.select_for_update().filter(user=user, enabled=True).first()
@@ -329,8 +325,8 @@ def user_management(request):
     password = request.data.get("password", "")
     if not username or len(username) > 150:
         return Response({"error": "Enter a username of 1 to 150 characters."}, status=400)
-    if role not in {ADMIN_GROUP, VIEWER_GROUP}:
-        return Response({"error": "Role must be Admin or Viewer."}, status=400)
+    if role not in APPLICATION_ROLES:
+        return Response({"error": "Choose SUPER_ADMIN, ANALYST, REVIEWER, or CLIENT."}, status=400)
     if not isinstance(password, str) or len(password) < 10:
         return Response({"error": "Set an initial password of at least 10 characters."}, status=400)
     if User.objects.filter(username__iexact=username).exists():
@@ -365,24 +361,25 @@ def manage_user(request, user_id: int):
         return Response({"error": "Superuser accounts must be managed outside application roles."}, status=409)
     target_role = request.data.get("role")
     if target_role is not None and (not isinstance(target_role, str)
-                                    or target_role not in {ADMIN_GROUP, VIEWER_GROUP}):
-        return Response({"error": "Role must be Admin or Viewer."}, status=400)
+                                    or target_role not in APPLICATION_ROLES):
+        return Response({"error": "Choose SUPER_ADMIN, ANALYST, REVIEWER, or CLIENT."}, status=400)
     requested_active = request.data.get("is_active", user.is_active)
     if not isinstance(requested_active, bool):
         return Response({"error": "is_active must be true or false."}, status=400)
     if user.pk == request.user.pk and (
-            (target_role is not None and target_role != ADMIN_GROUP) or not requested_active):
-        return Response({"error": "You cannot remove or deactivate your own Admin access."}, status=409)
+            (target_role is not None and target_role != SUPER_ADMIN_GROUP) or not requested_active):
+        return Response({"error": "You cannot remove or deactivate your own Super Admin access."}, status=409)
     proposed_active = requested_active
-    proposed_role = target_role or (ADMIN_GROUP if has_any_role(user, {ADMIN_GROUP}) else VIEWER_GROUP)
+    proposed_role = target_role or next((r for r in APPLICATION_ROLES
+                                         if has_any_role(user, {r})), CLIENT_GROUP)
     current_admins = User.objects.filter(is_active=True).filter(
-        Q(is_superuser=True) | Q(groups__name=ADMIN_GROUP)).distinct().count()
-    stays_admin = proposed_active and proposed_role == ADMIN_GROUP
-    loses_admin = user.is_active and has_any_role(user, {ADMIN_GROUP})
+        Q(is_superuser=True) | Q(groups__name__in=(ADMIN_GROUP, SUPER_ADMIN_GROUP))).distinct().count()
+    stays_admin = proposed_active and proposed_role == SUPER_ADMIN_GROUP
+    loses_admin = user.is_active and has_any_role(user, {SUPER_ADMIN_GROUP})
     proposed_admin_count = current_admins - int(loses_admin) + int(stays_admin)
     required_admins = min(2, current_admins)
     if proposed_admin_count < required_admins:
-        return Response({"error": "This change would reduce the active Admin count below the release requirement."}, status=409)
+        return Response({"error": "This change would reduce the active Super Admin count below the release requirement."}, status=409)
 
     password = request.data.get("password")
     if password:
@@ -397,8 +394,6 @@ def manage_user(request, user_id: int):
     user.save(update_fields=["password", "is_active"] if password else ["is_active"])
     user.groups.clear()
     user.groups.add(Group.objects.get_or_create(name=proposed_role)[0])
-    if proposed_role != ADMIN_GROUP:
-        AdminOTPDevice.objects.filter(user=user).delete()
     AuditEvent.objects.create(actor=request.user, action="application_user_updated", entity_type="user",
                               entity_id=str(user.pk), details={"role": proposed_role,
                                                               "is_active": user.is_active,
@@ -429,12 +424,12 @@ def signoff_status():
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([CanReview])
 def signoff(request):
     from . import data
 
-    if not has_any_role(request.user, {ADMIN_GROUP}):
-        return Response({"error": "Only an Admin can release reports."}, status=403)
+    if not has_any_role(request.user, {SUPER_ADMIN_GROUP, REVIEWER_GROUP}):
+        return Response({"error": "Only a Reviewer or Super Admin can release reports."}, status=403)
     try:
         info = data.run_info()
         source_hash = data.comparison_sha256()
@@ -456,10 +451,10 @@ def signoff(request):
         return Response({"error": "The Admin who built a report cannot release it."}, status=403)
 
     User = get_user_model()
-    active_admins = User.objects.filter(is_active=True).filter(
-        Q(is_superuser=True) | Q(groups__name=ADMIN_GROUP)).distinct().count()
-    if active_admins < 2:
-        return Response({"error": "At least two active Admin accounts are required for independent release."}, status=409)
+    active_reviewers = User.objects.filter(is_active=True).filter(
+        Q(is_superuser=True) | Q(groups__name__in=(ADMIN_GROUP, SUPER_ADMIN_GROUP, REVIEWER_GROUP))).distinct().count()
+    if active_reviewers < 2:
+        return Response({"error": "At least two active Reviewers or Super Admins are required for independent release."}, status=409)
 
     payload_path = settings.BASE_DIR.parent / "reports" / "dashboard_data.json"
     try:

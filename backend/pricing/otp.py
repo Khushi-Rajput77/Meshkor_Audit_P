@@ -1,4 +1,4 @@
-"""Small RFC 6238 TOTP implementation for administrator authenticator apps."""
+"""Small RFC 6238 TOTP implementation for authenticator apps."""
 from __future__ import annotations
 
 import base64

@@ -25,8 +25,8 @@ npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
 Open `http://127.0.0.1:5173/`. Sign in with a locally provisioned account.
-There are no hardcoded demo credentials. Admins enroll Google Authenticator on
-first sign-in; Viewers use password sign-in and can see only a released report.
+There are no hardcoded demo credentials. Every account enrolls Google
+Authenticator on first sign-in; Viewers can see only a released report.
 
 ## Import real source data
 

@@ -33,7 +33,8 @@ from django.db import connections
 
 from . import data
 from .models import AuditEvent, DrugUnitReview, ProcessingJob, ReportRecord, SourceFile
-from .permissions import ADMIN_GROUP, CanAdminister, CanAnalyze, has_any_role
+from .permissions import (ADMIN_GROUP, ANALYST_GROUP, REVIEWER_GROUP, SUPER_ADMIN_GROUP,
+                          CanAdminister, CanAnalyze, CanReview, has_any_role)
 from pipeline.common import csv_safe_cell
 
 HEADLINE = "price_type = 'negotiated_dollar' AND status = 'ok'"
@@ -501,8 +502,6 @@ def source_upload(request):
 @permission_classes([CanAnalyze])
 def processing_jobs(request):
     if request.method == "POST":
-        if not has_any_role(request.user, {ADMIN_GROUP}):
-            return Response({"error": "This action requires the Admin role."}, status=403)
         job_type = str(request.data.get("job_type", "")).strip()
         if job_type not in {"refresh_data", "market_report"}:
             return Response({"error": "job_type must be refresh_data or market_report."}, status=400)
@@ -557,6 +556,29 @@ def processing_job_detail(request, job_id: int):
 
 @api_view(["GET"])
 def report_records(request):
+    # Reviewers need the current draft's status before they can release it.
+    # Public clients remain limited to a report that has already been released.
+    if has_any_role(request.user, {SUPER_ADMIN_GROUP, ANALYST_GROUP, REVIEWER_GROUP}):
+        limit = _bounded_query_int(request, "limit", 50, 1, 200)
+        if limit is None:
+            return Response({"error": "limit must be a whole number."}, status=400)
+        try:
+            source_hash = data.comparison_sha256()
+            config_hash = data.config_sha256()
+        except data.DataMissing as exc:
+            return _missing(exc)
+        reports = ReportRecord.objects.filter(
+            source_hash=source_hash, config_hash=config_hash
+        ).select_related("built_by", "approved_by").order_by("-generated_at")[:limit]
+        return Response([{
+            "id": report.pk, "name": report.name, "report_type": report.report_type,
+            "status": report.status, "generated_at": report.generated_at,
+            "built_by": (report.built_by.get_full_name() or report.built_by.get_username())
+                        if report.built_by else None,
+            "approved_by": report.approved_by.get_username() if report.approved_by else None,
+            "approved_at": report.approved_at,
+        } for report in reports])
+
     payload, denied = _viewer_release_payload(request)
     if denied:
         return denied
@@ -579,6 +601,7 @@ def report_records(request):
         "id": r.pk, "name": r.name, "report_type": r.report_type, "status": r.status,
         "generated_at": r.generated_at, "source_hash": r.source_hash,
         "config_hash": r.config_hash, "metadata": r.metadata,
+        "built_by": (r.built_by.get_full_name() or r.built_by.get_username()) if r.built_by else None,
         "approved_by": r.approved_by.get_username() if r.approved_by else None,
         "approved_at": r.approved_at,
     } for r in ReportRecord.objects.select_related("approved_by")[:limit]])
@@ -737,9 +760,9 @@ def drug_scope_status(request):
 
 
 @api_view(["POST"])
-@permission_classes([CanAnalyze])
+@permission_classes([CanReview])
 def review_drug_unit(request, hcpcs: str):
-    """Record an Admin-submitted external clinical review for the exact scope source."""
+    """Record a Reviewer-submitted external clinical review for the exact scope source."""
     from decimal import Decimal, InvalidOperation
     from pipeline.common import parse_hcpcs_dosage, paths
 
@@ -1251,6 +1274,25 @@ def rates(request):
     except data.DataMissing as e:
         return _missing(e)
     return Response({"total": total, "limit": limit, "offset": offset, "rows": rows})
+
+
+@api_view(["GET"])
+def rate_filter_options(request):
+    """Return filter values found in the currently authorized comparison snapshot."""
+    payload, where, params, columns = _authorized_rate_filters(request)
+    if isinstance(columns, Response):
+        return columns
+    if "payer_group" not in columns:
+        return Response({"payer_groups": []})
+    payer_filter = "payer_group IS NOT NULL AND trim(payer_group) <> ''"
+    payer_where = f"{where} AND {payer_filter}" if where else f"WHERE {payer_filter}"
+    try:
+        rows = data.query(
+            f"SELECT DISTINCT payer_group FROM {{cmp}} {payer_where} "
+            "ORDER BY payer_group LIMIT 500", params, cmp="comparison")
+    except data.DataMissing as exc:
+        return _missing(exc)
+    return Response({"payer_groups": [row["payer_group"] for row in rows]})
 
 
 @api_view(["GET"])

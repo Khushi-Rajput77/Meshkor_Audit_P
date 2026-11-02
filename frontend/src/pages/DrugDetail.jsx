@@ -4,7 +4,7 @@ import { Loading, MarkupBars, Provisional, StatusPill, Table } from "../componen
 import RatesTable from "./RatesTable.jsx";
 
 export default function DrugDetail({ user }) {
-  const isAdmin = user?.roles?.includes("Admin");
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
   const { hcpcs } = useParams();
   const d = useApi(`medicare-part-b-drugs/${hcpcs}`, null, [hcpcs]);
   return (

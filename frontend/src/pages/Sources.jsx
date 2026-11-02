@@ -71,7 +71,7 @@ export default function Sources() {
         </select>
         {sourceKey === "hospital_mrf" && <>
           <label>Hospital system key
-            <input value={system} onChange={(e) => setSystem(e.target.value)} placeholder="e.g. cleveland_clinic" required />
+            <input value={system} onChange={(e) => setSystem(e.target.value)} placeholder="Hospital system identifier" required />
           </label>
           <label>Snapshot date
             <input type="date" value={snapshotDate} onChange={(e) => setSnapshotDate(e.target.value)} required />

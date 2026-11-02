@@ -111,11 +111,12 @@ as gaps. The application does not fill them with sample data.
 
 ## Roles and report release
 
-- **Admin** can manage accounts and imports, run the pipeline, review drug
-  billing units, view operational data, and prepare reports. Admin sign-in
-  requires Google Authenticator TOTP.
-- **Viewer** can access only a released report and its safe comparisons. Viewer
-  sign-in does not use TOTP.
+- **SUPER_ADMIN** manages users, organizations, permissions, and platform settings.
+- **ANALYST** manages permitted source imports and runs permitted market and plan audits; cannot approve their own reports.
+- **REVIEWER** reviews units and evidence and can approve or reject reports.
+- **CLIENT** can access only assigned organizations' approved plan reports and cannot access public platform APIs or raw claims.
+- Legacy Admin/Viewer accounts remain accepted for compatibility; new accounts use the four role names above.
+- All application roles enroll Google Authenticator TOTP at first sign-in.
 
 Report release requires a current complete Parquet build, clinical review for
 every selected drug, a different Admin from the report builder, and at least
