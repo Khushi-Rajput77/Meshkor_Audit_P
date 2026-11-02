@@ -1,0 +1,160 @@
+import argparse
+import csv
+import json
+import math
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+import yaml
+
+from .export.summary_export import export_summary
+from .logging.secure_logger import configure_secure_logger
+from .processing.aggregate_claims import aggregate_claims
+from .processing.resolve_adjustments import resolve_claims
+from .readers import read_claims
+from .validation.claims_validator import HCPCS_PATTERN, REQUIRED_FIELDS, validate_claim
+
+
+logger = configure_secure_logger()
+CLAIM_LIMIT = 1_000_000
+SCHEMA_VERSION = "1.0"
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Process claims locally and export approved aggregates only."
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    extract = commands.add_parser("extract", help="Validate and aggregate claims locally")
+    extract.add_argument("--claims", required=True, type=Path)
+    extract.add_argument("--config", default=Path("config/client_config.yaml"), type=Path)
+    extract.add_argument("--output", default=Path("output"), type=Path)
+    args = parser.parse_args(argv)
+    if args.command == "extract":
+        return extract_claims(args)
+    return 2
+
+
+def extract_claims(args):
+    try:
+        config = yaml.safe_load(args.config.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.error("The local configuration could not be read: %s", exc)
+        return 2
+    plan_id = str(config.get("plan_id", "")).strip()
+    plan_reference = str(config.get("plan_reference", "")).strip()
+    if (not plan_id or not plan_reference
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,119}", plan_reference)):
+        logger.error("Set plan_id and a safe plan_reference in the local client configuration.")
+        return 2
+    schema_version = str(config.get("schema_version", SCHEMA_VERSION)).strip()
+    if schema_version != SCHEMA_VERSION:
+        logger.error("This extractor supports schema_version %s.", SCHEMA_VERSION)
+        return 2
+    billing_units = config.get("hcpcs_billing_units") or {}
+    if not isinstance(billing_units, dict):
+        logger.error("hcpcs_billing_units must be a mapping sourced from a verified CMS scope.")
+        return 2
+    normalized_billing_units = {}
+    for code, unit in billing_units.items():
+        normalized_code = str(code).strip().upper()
+        if (not HCPCS_PATTERN.fullmatch(normalized_code) or not isinstance(unit, dict)
+                or normalized_code in normalized_billing_units):
+            logger.error("A configured billing unit has an invalid code or structure.")
+            return 2
+        try:
+            quantity = float(unit.get("qty"))
+        except (TypeError, ValueError):
+            logger.error("A configured billing unit quantity is invalid.")
+            return 2
+        if (not math.isfinite(quantity) or quantity <= 0
+                or not str(unit.get("unit", "")).strip()):
+            logger.error("A configured billing unit quantity and unit are required.")
+            return 2
+        if (unit.get("verification_status") != "validated"
+                or not str(unit.get("source_reference", "")).strip()
+                or not re.fullmatch(r"[0-9a-fA-F]{64}", str(unit.get("source_sha256", "")))):
+            logger.error("Every billing unit needs validated status, a source reference, and a SHA-256 checksum.")
+            return 2
+        normalized_billing_units[normalized_code] = unit
+    billing_units = normalized_billing_units
+
+    claims, errors, fingerprints = [], [], set()
+    input_count = duplicate_count = invalid_count = 0
+    try:
+        for source_row, source in read_claims(args.claims):
+            input_count += 1
+            if input_count > CLAIM_LIMIT:
+                raise ValueError(f"Input exceeds the {CLAIM_LIMIT:,}-record safety limit.")
+            try:
+                claim = validate_claim(source, source_row)
+                if claim["plan_id"] != plan_id:
+                    raise ValueError("plan_id does not match the configured local plan")
+                fingerprint = _record_fingerprint(claim)
+                if fingerprint in fingerprints:
+                    duplicate_count += 1
+                    errors.append({"row": source_row, "category": "duplicate_exact_record",
+                                   "reason": "Exact duplicate excluded."})
+                    continue
+                fingerprints.add(fingerprint)
+                claims.append(claim)
+            except (ValueError, TypeError) as exc:
+                invalid_count += 1
+                errors.append({"row": source_row, "category": "invalid_record",
+                               "reason": str(exc)})
+    except (OSError, ValueError, NotImplementedError, csv.Error) as exc:
+        logger.error("Claims input could not be processed: %s", exc)
+        return 2
+
+    quality = {
+        "total_input_records": input_count, "valid_records": len(claims),
+        "invalid_records": invalid_count, "duplicate_records": duplicate_count,
+        "adjusted_records": 0, "reversed_records": 0, "excluded_records": invalid_count + duplicate_count,
+        "reasons": {},
+    }
+    for error in errors:
+        quality["reasons"][error["category"]] = quality["reasons"].get(error["category"], 0) + 1
+    adjudicated = resolve_claims(claims, quality)
+    dates = [claim["service_date"] for claim in adjudicated]
+    source_period = f"{min(dates).isoformat()}/{max(dates).isoformat()}" if dates else ""
+    extracted_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    summary, privacy_quality = aggregate_claims(
+        adjudicated, plan_reference=plan_reference, source_period=source_period,
+        extracted_at=extracted_at, billing_units=billing_units,
+    )
+    for reason, count in privacy_quality["reasons"].items():
+        quality["reasons"][reason] = quality["reasons"].get(reason, 0) + count
+        quality["excluded_records"] += count
+    quality["exported_aggregate_rows"] = len(summary)
+    quality["schema_version"] = SCHEMA_VERSION
+    _write_quality(args.output, quality, errors)
+    if not summary:
+        logger.error("No aggregates passed adjudication, unit, and privacy controls; no summary was exported.")
+        return 1
+    destination, manifest, digest = export_summary(summary, args.output)
+    logger.info("Created %s (%d approved aggregate rows; SHA-256 %s)",
+                destination, len(summary), digest)
+    logger.info("Local data-quality report: %s", args.output / "data_quality.json")
+    logger.info("Manifest: %s. Raw claims remain in the client environment.", manifest)
+    return 0
+
+
+def _record_fingerprint(claim):
+    fields = sorted(REQUIRED_FIELDS | {"adjustment_reference", "reversal_reference", "service_setting"})
+    return tuple(str(claim.get(field, "")) for field in fields)
+
+
+def _write_quality(output, quality, errors):
+    output.mkdir(parents=True, exist_ok=True)
+    # Local row numbers/reasons only; never include a claim or member identifier.
+    (output / "data_quality.json").write_text(json.dumps({
+        "summary": quality, "row_errors": errors,
+        "raw_claim_values_included": False,
+        "member_identifiers_included": False,
+    }, indent=2), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -11,7 +11,6 @@ admin.site.unregister(User)
 
 @admin.register(User)
 class ProtectedRootAdmin(UserAdmin):
-    """Keep system-owner superuser accounts from routine staff changes."""
     actions = tuple(action for action in UserAdmin.actions if action != "delete_selected")
 
     def has_change_permission(self, request, obj=None):
@@ -62,3 +61,18 @@ class AuditEventAdmin(admin.ModelAdmin):
     list_filter = ("action", "entity_type")
     search_fields = ("entity_id", "actor__username")
     readonly_fields = ("actor", "action", "entity_type", "entity_id", "details", "created_at")
+
+from .models import (
+    AuditReview, ClaimsSummaryImport, ClaimsSummaryRecord, NetworkRosterEntry,
+    Plan, PlanAudit, PlanAuditResult, PlanOrganization, SavingsOpportunity,
+)
+
+for model in (
+    PlanOrganization, Plan, ClaimsSummaryImport, ClaimsSummaryRecord,
+    NetworkRosterEntry, PlanAudit, PlanAuditResult, SavingsOpportunity, AuditReview,
+):
+    admin.site.register(model)
+
+from .models import PlanOrganizationAccess
+
+admin.site.register(PlanOrganizationAccess)

@@ -1,26 +1,27 @@
-import React, { useEffect, useState } from "react";
+import React, { lazy, Suspense, useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 
 import { completeOtpLogin, confirmOtpEnrollment, getJSON, login, logout, restoreLogin, startOtpEnrollment } from "./api.js";
 import "./styles.css";
-import Overview from "./pages/Overview.jsx";
-import DrugDetail from "./pages/DrugDetail.jsx";
-import Hospitals from "./pages/Hospitals.jsx";
-import HospitalDetail from "./pages/HospitalDetail.jsx";
-import Rates from "./pages/Rates.jsx";
-import Quality from "./pages/Quality.jsx";
-import Method from "./pages/Method.jsx";
-import Sources from "./pages/Sources.jsx";
-import Reports from "./pages/Reports.jsx";
-import ReferenceData from "./pages/ReferenceData.jsx";
-import HospitalFiles from "./pages/HospitalFiles.jsx";
-import DrugScope from "./pages/DrugScope.jsx";
-import UnitValidation from "./pages/UnitValidation.jsx";
-import AuditLogs from "./pages/AuditLogs.jsx";
-import Settings from "./pages/Settings.jsx";
-import UserManagement from "./pages/UserManagement.jsx";
+const Overview = lazy(() => import("./pages/Overview.jsx"));
+const DrugDetail = lazy(() => import("./pages/DrugDetail.jsx"));
+const Hospitals = lazy(() => import("./pages/Hospitals.jsx"));
+const HospitalDetail = lazy(() => import("./pages/HospitalDetail.jsx"));
+const Rates = lazy(() => import("./pages/Rates.jsx"));
+const Quality = lazy(() => import("./pages/Quality.jsx"));
+const Method = lazy(() => import("./pages/Method.jsx"));
+const Sources = lazy(() => import("./pages/Sources.jsx"));
+const Reports = lazy(() => import("./pages/Reports.jsx"));
+const ReferenceData = lazy(() => import("./pages/ReferenceData.jsx"));
+const HospitalFiles = lazy(() => import("./pages/HospitalFiles.jsx"));
+const DrugScope = lazy(() => import("./pages/DrugScope.jsx"));
+const UnitValidation = lazy(() => import("./pages/UnitValidation.jsx"));
+const AuditLogs = lazy(() => import("./pages/AuditLogs.jsx"));
+const Settings = lazy(() => import("./pages/Settings.jsx"));
+const UserManagement = lazy(() => import("./pages/UserManagement.jsx"));
+const PlanAudits = lazy(() => import("./pages/PlanAudits.jsx"));
 
 function Landing({ onLogin }) {
   const [username, setUsername] = useState("");
@@ -107,7 +108,7 @@ function Landing({ onLogin }) {
           <p>Sign in to view hospital reports and price comparisons.</p>
         </div>}
         {otpChallenge && <h2>{otpEnrollment ? "Set up Google Authenticator" : "Verify your sign-in"}</h2>}
-        {otpEnrollment && <p className="muted">Authenticator setup is required for Admin accounts. Scan the code, then enter the current six-digit code.</p>}
+        {otpEnrollment && <p className="muted">Authenticator setup is required for every account. Scan the code, then enter the current six-digit code.</p>}
         {otpChallenge && !otpEnrollment && <p className="muted">Enter the current six-digit code from your authenticator app.</p>}
         {!otpChallenge && <>
           <label>Username<input autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required /></label>
@@ -135,7 +136,7 @@ function Landing({ onLogin }) {
           <span>{error}</span>{lockoutSeconds > 0 && <strong>Retry in {Math.floor(lockoutSeconds / 60)}:{String(lockoutSeconds % 60).padStart(2, "0")}</strong>}
         </div>}
         <button disabled={busy || lockoutSeconds > 0 || (otpChallenge && otpCode.length !== 6 && !recoveryCode)}>{busy ? "Signing in…" : otpEnrollment ? "Enable authenticator and continue" : otpChallenge ? "Verify code" : lockoutSeconds ? "Please wait" : "Sign in"}</button>
-        {!otpChallenge && !firstLoginCodes.length && <p className="login-security-note"><span aria-hidden="true">●</span> Admin accounts use Google Authenticator verification</p>}
+        {!otpChallenge && !firstLoginCodes.length && <p className="login-security-note"><span aria-hidden="true">●</span> All accounts use Google Authenticator verification</p>}
         </>}
       </form>
     </main>
@@ -148,7 +149,17 @@ function LegacyDrugRedirect() {
 }
 
 function AdminOnly({ user, children }) {
-  return user?.roles?.includes("Admin") ? children : <Navigate to="/" replace />;
+  return user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role)) ? children : <Navigate to="/" replace />;
+}
+
+function AnalystOrAdmin({ user, children }) {
+  return user?.roles?.some((role) => ["SUPER_ADMIN", "ANALYST", "Admin"].includes(role))
+    ? children : <Navigate to="/" replace />;
+}
+
+function ReviewerOrAdmin({ user, children }) {
+  return user?.roles?.some((role) => ["SUPER_ADMIN", "REVIEWER", "Admin"].includes(role))
+    ? children : <Navigate to="/" replace />;
 }
 
 function Shell({ user, onLogout }) {
@@ -156,7 +167,7 @@ function Shell({ user, onLogout }) {
   const [search, setSearch] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
-  const titles = { "/": "Overview", "/reference-data-sets": "Reference data", "/hospital-price-transparency-files": "Hospital price files", "/hospitals": "Hospitals", "/drug-selection-scope": "Drug selection scope", "/drug-unit-validations": "Drug unit validations", "/hospital-drug-price-comparisons": "Hospital drug price comparisons", "/data-sources": "Data sources", "/reports": "Reports & exports", "/audit-logs": "Audit logs", "/application-settings": "Application settings", "/hospital-file-quality": "Hospital file quality", "/methodology": "Methodology", "/user-management": "User management" };
+  const titles = { "/": "Overview", "/reference-data-sets": "Reference data", "/hospital-price-transparency-files": "Hospital price files", "/hospitals": "Hospitals", "/drug-selection-scope": "Drug selection scope", "/drug-unit-validations": "Drug unit validations", "/hospital-drug-price-comparisons": "Hospital drug price comparisons", "/data-sources": "Data sources", "/reports": "Reports & exports", "/plan-specific-audits": "Plan-specific audits", "/audit-logs": "Audit logs", "/application-settings": "Application settings", "/hospital-file-quality": "Hospital file quality", "/methodology": "Methodology", "/user-management": "User management" };
   const pageTitle = titles[location.pathname] || "Infusion Drug Markup Audit";
   function submitSearch(event) {
     event.preventDefault();
@@ -169,19 +180,24 @@ function Shell({ user, onLogout }) {
         <div className="sidebar-group"><span className="sidebar-label">AUDIT PLATFORM</span><nav aria-label="Main navigation">
           <NavLink to="/" end><span>◫</span>{!collapsed && "Overview"}</NavLink>
           <NavLink to="/hospitals"><span>⌂</span>{!collapsed && "Hospitals"}</NavLink>
-          {user.roles?.includes("Admin") && <NavLink to="/drug-selection-scope"><span>#</span>{!collapsed && "Drug Scope"}</NavLink>}
+          {user.roles?.some((role) => ["SUPER_ADMIN", "ANALYST", "Admin"].includes(role)) && <NavLink to="/drug-selection-scope"><span>#</span>{!collapsed && "Drug Scope"}</NavLink>}
           <NavLink to="/hospital-drug-price-comparisons"><span>↗</span>{!collapsed && "Comparisons"}</NavLink>
+          <NavLink to="/plan-specific-audits"><span>◉</span>{!collapsed && "Plan Audits"}</NavLink>
           <NavLink to="/reports"><span>▧</span>{!collapsed && "Reports"}</NavLink>
           <details className="sidebar-more">
             <summary><span>•••</span>{!collapsed && "More"}</summary>
             <div className="sidebar-subnav">
               <NavLink to="/methodology">Methodology</NavLink>
-              {user.roles?.includes("Admin") && <>
+              {user.roles?.some((role) => ["SUPER_ADMIN", "ANALYST", "Admin"].includes(role)) && <>
                 <NavLink to="/hospital-price-transparency-files">Hospital Price Files</NavLink>
                 <NavLink to="/reference-data-sets">Reference Data Sets</NavLink>
                 <NavLink to="/hospital-file-quality">Hospital File Quality</NavLink>
                 <NavLink to="/data-sources">Data Sources & Import</NavLink>
+              </>}
+              {user.roles?.some((role) => ["SUPER_ADMIN", "REVIEWER", "Admin"].includes(role)) && <>
                 <NavLink to="/drug-unit-validations">Drug Unit Review</NavLink>
+              </>}
+              {user.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role)) && <>
                 <NavLink to="/audit-logs">Audit Logs</NavLink>
                 <NavLink to="/user-management">User Management</NavLink>
               </>}
@@ -198,6 +214,7 @@ function Shell({ user, onLogout }) {
         <div className="account"><div><b>{user.display_name}</b><span className="muted">{user.roles?.join(", ")}</span></div><button type="button" onClick={onLogout}>Logout</button></div>
       </header>
       <main className="page-content">
+        <Suspense fallback={<div className="auth-loading" role="status">Loading page…</div>}>
         <Routes>
           <Route path="/" element={<Overview user={user} />} />
           <Route path="/reference-data-sets" element={<AdminOnly user={user}><ReferenceData /></AdminOnly>} />
@@ -205,12 +222,13 @@ function Shell({ user, onLogout }) {
           <Route path="/medicare-part-b-drugs/:hcpcs" element={<DrugDetail user={user} />} />
           <Route path="/hospitals" element={<Hospitals user={user} />} />
           <Route path="/hospitals/:key" element={<HospitalDetail user={user} />} />
-          <Route path="/drug-selection-scope" element={<AdminOnly user={user}><DrugScope user={user} /></AdminOnly>} />
-          <Route path="/drug-unit-validations" element={<AdminOnly user={user}><UnitValidation user={user} /></AdminOnly>} />
+          <Route path="/drug-selection-scope" element={<AnalystOrAdmin user={user}><DrugScope user={user} /></AnalystOrAdmin>} />
+          <Route path="/drug-unit-validations" element={<ReviewerOrAdmin user={user}><UnitValidation user={user} /></ReviewerOrAdmin>} />
           <Route path="/hospital-drug-price-comparisons" element={<Rates user={user} />} />
           <Route path="/hospital-file-quality" element={<AdminOnly user={user}><Quality /></AdminOnly>} />
-          <Route path="/data-sources" element={<AdminOnly user={user}><Sources user={user} /></AdminOnly>} />
+          <Route path="/data-sources" element={<AnalystOrAdmin user={user}><Sources user={user} /></AnalystOrAdmin>} />
           <Route path="/reports" element={<Reports user={user} />} />
+          <Route path="/plan-specific-audits" element={<PlanAudits user={user} />} />
           <Route path="/audit-logs" element={<AdminOnly user={user}><AuditLogs /></AdminOnly>} />
           <Route path="/user-management" element={<AdminOnly user={user}><UserManagement user={user} /></AdminOnly>} />
           <Route path="/application-settings" element={<Settings user={user} />} />
@@ -224,10 +242,11 @@ function Shell({ user, onLogout }) {
           <Route path="/quality" element={<Navigate to="/hospital-file-quality" replace />} />
           <Route path="/sources" element={<Navigate to="/data-sources" replace />} />
           <Route path="/settings" element={<Navigate to="/application-settings" replace />} />
-          <Route path="/plan-audit" element={<Navigate to="/methodology" replace />} />
+          <Route path="/plan-audit" element={<Navigate to="/plan-specific-audits" replace />} />
           <Route path="/method" element={<Navigate to="/methodology" replace />} />
           <Route path="/dashboard/*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </main></div>
     </div>
   );

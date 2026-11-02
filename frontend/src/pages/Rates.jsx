@@ -1,7 +1,7 @@
 import RatesTable from "./RatesTable.jsx";
 
 export default function Rates({ user }) {
-  const isAdmin = user?.roles?.includes("Admin");
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
   return (
     <section>
       <h1>{isAdmin ? "All hospital rates" : "Released hospital comparisons"}</h1>

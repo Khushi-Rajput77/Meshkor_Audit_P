@@ -3,36 +3,148 @@ import { Link } from "react-router-dom";
 import { fmt, useApi } from "../api.js";
 import { Loading, MarkupBars, Table } from "../components.jsx";
 
+const hasRole = (user, ...roles) => user?.roles?.some((role) => roles.includes(role));
+
+function DashboardFrame({ role, title, description, links, children }) {
+  return <div className={`overview-page role-overview role-overview--${role.toLowerCase()}`}>
+    <header className="overview-header"><div className="header-titles">
+      <p className="eyebrow">{role} workspace</p><h1 className="header-main-title">{title}</h1>
+      <p className="header-subtitle">{description}</p>
+    </div></header>
+    <nav className="role-dashboard-links" aria-label={`${role} dashboard actions`}>
+      {links.map(([to, label]) => <Link key={to} to={to}>{label}</Link>)}
+    </nav>
+    {children}
+  </div>;
+}
+
+function DashboardMetric({ label, state, value, detail }) {
+  return <article className="kpi-card">
+    <span className="kpi-label">{label}</span>
+    <Loading state={state}>{value}</Loading>
+    {detail && <small className="kpi-definition">{detail}</small>}
+  </article>;
+}
+
+function AnalystDashboard() {
+  const sources = useApi("data-sources");
+  const jobs = useApi("data-sources/processing-jobs", { limit: 5 });
+  const scope = useApi("drug-selection-scope");
+  const requiredSources = (sources.data || []).filter((source) => source.required);
+  const availableRequiredSources = requiredSources.filter((source) => source.status === "available").length;
+  const latestJob = jobs.data?.[0];
+  return <DashboardFrame role="Analyst" title="Data and analysis workspace"
+    description="Track source coverage, pipeline runs, and the CMS-ranked drug scope from the loaded project data."
+    links={[["/data-sources", "Manage source imports"], ["/drug-selection-scope", "Review drug scope"],
+      ["/hospital-drug-price-comparisons", "Open comparisons"], ["/plan-specific-audits", "Plan audits"]]}>
+    <section className="kpi-grid" aria-label="Analyst data status">
+      <DashboardMetric label="Required source coverage" state={sources}
+        value={(data) => <strong className="kpi-value">{availableRequiredSources} / {requiredSources.length}</strong>}
+        detail="Configured required data sources available" />
+      <DashboardMetric label="Latest pipeline job" state={jobs}
+        value={(data) => <strong className="kpi-value kpi-value--text">{latestJob ? `${latestJob.job_type}: ${latestJob.status}` : "No pipeline jobs"}</strong>}
+        detail={latestJob?.finished_at ? `Completed ${new Date(latestJob.finished_at).toLocaleString()}` : "Current job status from the processing queue"} />
+      <DashboardMetric label="CMS drug scope" state={scope}
+        value={(data) => <strong className="kpi-value">{data.selected_count ?? "—"} / {data.target_count ?? "—"}</strong>}
+        detail={scope.data?.source_file || scope.data?.reason || "Selected codes from the configured CMS spending source"} />
+    </section>
+    <section><h2>Recent pipeline jobs</h2>
+      <Loading state={jobs}>{(rows) => rows.length ? <Table rows={rows} columns={[
+        { key: "job_type", label: "Job" }, { key: "status", label: "Status" },
+        { key: "progress", label: "Progress", render: (row) => `${fmt.n(row.progress)}%` },
+        { key: "created_at", label: "Requested", render: (row) => new Date(row.created_at).toLocaleString() },
+      ]} /> : <p className="note">No pipeline jobs have been recorded.</p>}</Loading>
+    </section>
+  </DashboardFrame>;
+}
+
+function ReviewerDashboard() {
+  const reviews = useApi("drug-unit-validations");
+  const reports = useApi("reports");
+  const audits = useApi("plan-audits");
+  const reportRows = reports.data || [];
+  const awaitingRelease = reportRows.filter((report) => report.status === "generated").length;
+  const needsPlanReview = (audits.data || []).filter((audit) => audit.status === "needs_review").length;
+  return <DashboardFrame role="Reviewer" title="Review and release workspace"
+    description="See clinical unit exceptions, reports awaiting release, and plan audits requiring review."
+    links={[["/drug-unit-validations", "Review drug units"], ["/reports", "Review and release reports"],
+      ["/plan-specific-audits", "Plan audits"], ["/methodology", "Methodology"]]}>
+    <section className="kpi-grid" aria-label="Reviewer work queue">
+      <DashboardMetric label="Unit exceptions" state={reviews}
+        value={(data) => <strong className="kpi-value">{fmt.n(data.total)}</strong>}
+        detail="Current comparison rows requiring clinical or unit review" />
+      <DashboardMetric label="Reports awaiting release" state={reports}
+        value={(data) => <strong className="kpi-value">{awaitingRelease}</strong>}
+        detail={reportRows[0]?.name || "Current report builds"} />
+      <DashboardMetric label="Plan audits needing review" state={audits}
+        value={(data) => <strong className="kpi-value">{needsPlanReview}</strong>}
+        detail="Assigned plan audits marked needs review" />
+    </section>
+    <section><h2>Current report status</h2>
+      <Loading state={reports}>{(rows) => rows.length ? <Table rows={rows} columns={[
+        { key: "name", label: "Report" }, { key: "status", label: "Status" },
+        { key: "generated_at", label: "Built", render: (row) => new Date(row.generated_at).toLocaleString() },
+        { key: "built_by", label: "Built by", render: (row) => row.built_by || "—" },
+      ]} /> : <p className="note">No current report build is available.</p>}</Loading>
+    </section>
+  </DashboardFrame>;
+}
+
+function ClientDashboard() {
+  const audits = useApi("plan-audits");
+  return <DashboardFrame role="Client" title="Your approved plan audits"
+    description="View only approved reports for organizations assigned to your account."
+    links={[["/plan-specific-audits", "Open approved plan audits"], ["/reports", "Market report"],
+      ["/methodology", "Methodology"]]}>
+    <section className="kpi-grid" aria-label="Assigned approved audits">
+      <DashboardMetric label="Approved plan audits" state={audits}
+        value={(rows) => <strong className="kpi-value">{rows.length}</strong>}
+        detail="Available to your assigned organizations" />
+    </section>
+    <section><h2>Available audits</h2>
+      <Loading state={audits}>{(rows) => rows.length ? <Table rows={rows} columns={[
+        { key: "audit_name", label: "Audit" }, { key: "organization_name", label: "Organization" },
+        { key: "plan_name", label: "Plan" }, { key: "reporting_period", label: "Reporting period" },
+        { key: "status", label: "Status" },
+      ]} /> : <p className="note">No approved plan audits are currently assigned to your account.</p>}</Loading>
+    </section>
+  </DashboardFrame>;
+}
+
 export default function Overview({ user }) {
-  const isAdmin = user?.roles?.includes("Admin");
+  if (hasRole(user, "SUPER_ADMIN", "Admin")) return <MarketOverview user={user} />;
+  if (hasRole(user, "ANALYST")) return <AnalystDashboard />;
+  if (hasRole(user, "REVIEWER")) return <ReviewerDashboard />;
+  return <ClientDashboard />;
+}
+
+function MarketOverview({ user }) {
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
+  const isAnalyst = user?.roles?.includes("ANALYST");
+  const isReviewer = user?.roles?.includes("REVIEWER");
+  const workspaceRole = isAnalyst ? "Analyst"
+    : isReviewer ? "Reviewer"
+      : user?.roles?.some((role) => ["CLIENT", "Viewer"].includes(role)) ? "Client" : "User";
+  const workspaceLinks = isAdmin
+    ? [["/data-sources", "Manage imports"], ["/drug-unit-validations", "Review drug units"],
+      ["/hospital-file-quality", "File quality"], ["/audit-logs", "Audit logs"]]
+    : isAnalyst
+      ? [["/data-sources", "Manage imports"], ["/drug-selection-scope", "Drug scope"],
+        ["/plan-specific-audits", "Plan audits"], ["/reports", "Report status"]]
+      : isReviewer
+        ? [["/drug-unit-validations", "Review drug units"], ["/reports", "Review and release reports"],
+          ["/plan-specific-audits", "Plan audits"], ["/methodology", "Methodology"]]
+        : [["/plan-specific-audits", "Approved plan audits"], ["/hospital-drug-price-comparisons", "Comparisons"],
+          ["/hospitals", "Hospitals"], ["/methodology", "Methodology"]];
   const meta = useApi("dashboard/summary");
   const drugs = useApi("medicare-part-b-drugs");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState("median_markup");
   const [sortDir, setSortDir] = useState("desc");
 
-  if (!isAdmin && meta.error?.status === 403) {
-    return <div className="overview-page">
-      <header className="overview-header">
-        <div className="header-titles">
-          <p className="eyebrow">Viewer workspace</p>
-          <h1 className="header-main-title">You are signed in</h1>
-          <p className="header-subtitle">There is no released report available for Viewer access yet.</p>
-        </div>
-      </header>
-      <section className="note" role="status">
-        <h2>Report release is pending</h2>
-        <p>Your Viewer account and password were accepted. An Admin must finish the external clinical unit reviews and have a different Admin release the current report before Viewer dashboards and comparisons become available.</p>
-      </section>
-    </div>;
-  }
-
+  // Keep hooks unconditional: protected summary requests can change from
+  // loading to 403 after sign-in for roles without a released dashboard.
   const drugRows = drugs.data || [];
-  const m = meta.data || {};
-  const reviewRange = m.review_range || [];
-  const missingAspRows = m.statuses?.find((row) => row.status === "missing_asp")?.n;
-
-  // Table filtering and sorting
   const filteredRows = useMemo(() => {
     let rows = drugRows.slice();
     if (search.trim()) {
@@ -44,14 +156,37 @@ export default function Overview({ user }) {
       );
     }
     rows.sort((a, b) => {
-      let av = a[sortKey];
-      let bv = b[sortKey];
+      const av = a[sortKey];
+      const bv = b[sortKey];
       if (av == null) return 1;
       if (bv == null) return -1;
       return (av > bv ? 1 : av < bv ? -1 : 0) * (sortDir === "asc" ? 1 : -1);
     });
     return rows;
   }, [drugRows, search, sortKey, sortDir]);
+
+  if (!isAdmin && meta.error?.status === 403) {
+    return <div className="overview-page">
+      <header className="overview-header">
+        <div className="header-titles">
+          <p className="eyebrow">{workspaceRole} workspace</p>
+          <h1 className="header-main-title">You are signed in</h1>
+          <p className="header-subtitle">There is no released report available for this account yet.</p>
+        </div>
+      </header>
+      <section className="note" role="status">
+        <h2>Report release is pending</h2>
+        <p>Your {workspaceRole} account is signed in. A Reviewer must finish the required unit reviews and an authorized, independent Reviewer must release the current report before protected market comparisons become available.</p>
+        <nav className="role-dashboard-links" aria-label={`${workspaceRole} workspace actions`}>
+          {workspaceLinks.map(([to, label]) => <Link key={to} to={to}>{label}</Link>)}
+        </nav>
+      </section>
+    </div>;
+  }
+
+  const m = meta.data || {};
+  const reviewRange = m.review_range || [];
+  const missingAspRows = m.statuses?.find((row) => row.status === "missing_asp")?.n;
 
   function handleSort(key) {
     if (sortKey === key) {
@@ -73,7 +208,7 @@ export default function Overview({ user }) {
           ========================================================================= */}
       <header className="overview-header">
         <div className="header-titles">
-          <p className="eyebrow">{isAdmin ? "Admin workspace" : "Viewer workspace"}</p>
+          <p className="eyebrow">{isAdmin ? "Super Admin workspace" : `${workspaceRole} workspace`}</p>
           <h1 className="header-main-title">{isAdmin ? "Audit Operations Dashboard" : "Hospital Pricing Insights"}</h1>
           <p className="header-subtitle">
             {isAdmin
@@ -109,18 +244,8 @@ export default function Overview({ user }) {
             ? "Manage source imports, resolve unit reviews, and inspect the audit trail."
             : "Browse hospitals, compare reported prices, and review the benchmark methodology."}</p>
         </div>
-        <nav className="role-dashboard-links" aria-label="Dashboard shortcuts">
-          {isAdmin ? <>
-            <Link to="/data-sources">Manage imports</Link>
-            <Link to="/drug-unit-validations">Review drug units</Link>
-            <Link to="/hospital-file-quality">File quality</Link>
-            <Link to="/audit-logs">Audit logs</Link>
-          </> : <>
-            <Link to="/hospital-drug-price-comparisons">Explore comparisons</Link>
-            <Link to="/hospitals">Browse hospitals</Link>
-            <Link to="/reports">View reports</Link>
-            <Link to="/methodology">Methodology</Link>
-          </>}
+        <nav className="role-dashboard-links" aria-label={`${workspaceRole} dashboard shortcuts`}>
+          {workspaceLinks.map(([to, label]) => <Link key={to} to={to}>{label}</Link>)}
         </nav>
       </section>
 

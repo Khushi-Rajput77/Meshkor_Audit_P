@@ -4,7 +4,7 @@ import { Loading, StatusPill, Table } from "../components.jsx";
 import RatesTable from "./RatesTable.jsx";
 
 export default function HospitalDetail({ user }) {
-  const isAdmin = user?.roles?.includes("Admin");
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
   const { key } = useParams();
   const h = useApi(`hospitals/${key}`, null, [key]);
   return (

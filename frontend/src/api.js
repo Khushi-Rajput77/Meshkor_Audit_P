@@ -133,7 +133,7 @@ export async function downloadFile(path, filename) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  window.URL.revokeObjectURL(url);
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
 }
 
 function clean(p) {
@@ -157,11 +157,11 @@ export function useApi(path, params, deps = []) {
 }
 
 export const fmt = {
-  x: (v) => (v == null ? "—" : `${v.toFixed(2)}×`),
-  usd: (v) => (v == null ? "—" : v.toLocaleString("en-US", { style: "currency", currency: "USD",
-    maximumFractionDigits: v < 10 ? 3 : 2 })),
+  x: (v) => (v == null || !Number.isFinite(Number(v)) ? "—" : `${Number(v).toFixed(2)}×`),
+  usd: (v) => (v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toLocaleString("en-US", { style: "currency", currency: "USD",
+    maximumFractionDigits: Number(v) < 10 ? 3 : 2 })),
   n: (v) => (v == null ? "—" : v.toLocaleString("en-US")),
-  pct: (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(0)}%`),
+  pct: (v) => (v == null || !Number.isFinite(Number(v)) ? "—" : `${Number(v) > 0 ? "+" : ""}${Number(v).toFixed(0)}%`),
 };
 
 export const STATUS_TEXT = {
@@ -183,3 +183,41 @@ export const PRICE_TYPE_TEXT = {
   gross_charge: "Gross charge",
   contract_terms: "Contract terms",
 };
+
+async function uploadForm(path, form) {
+  await request(API_ENDPOINTS.csrfToken);
+  const cleanPath = path.split("/").filter(Boolean).join("/");
+  const headers = { "X-CSRFToken": csrfCookie() };
+  if (accessToken) headers.Authorization = "Bearer " + accessToken;
+  const response = await fetch(API_ROOT + "/" + cleanPath + "/", {
+    method: "POST", body: form, credentials: "same-origin", headers,
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(body.error || response.status + " " + response.statusText);
+    error.payload = body;
+    throw error;
+  }
+  return body;
+}
+
+export async function uploadPlanSummary(organizationId, planId, summaryFile, manifestFile) {
+  if (!summaryFile || !manifestFile) throw new Error("Choose both the aggregate CSV and its manifest.");
+  const form = new FormData();
+  form.append("organization_id", String(organizationId));
+  form.append("plan_id", String(planId));
+  form.append("file", summaryFile);
+  form.append("manifest", manifestFile);
+  return uploadForm("plan-audits/import-summary/", form);
+}
+
+export async function uploadNetworkRoster(planId, rosterFile) {
+  if (!rosterFile) throw new Error("Choose a network roster CSV.");
+  const form = new FormData();
+  form.append("file", rosterFile);
+  return uploadForm("plans/" + planId + "/network-roster/", form);
+}
+
+export async function deleteJSON(path) {
+  return request(path, { method: "DELETE" });
+}

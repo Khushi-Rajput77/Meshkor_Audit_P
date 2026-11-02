@@ -2,8 +2,8 @@
 
 ## Fixed in the current work
 
-- Viewer password sign-in now completes without an Admin-only TOTP challenge;
-  Admin enrollment and OTP verification remain mandatory.
+- Admin and Viewer password sign-in now require authenticator enrollment and
+  one-time code verification before a session is issued.
 - Account management validates role and active-state input, prevents self
   demotion/deactivation, enforces the active-Admin release requirement, and
   applies account changes transactionally.

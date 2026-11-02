@@ -78,7 +78,7 @@ class DrugUnitReview(models.Model):
 
 
 class AdminOTPDevice(models.Model):
-    """Authenticator-app TOTP enrollment for administrator accounts."""
+    """Encrypted authenticator-app TOTP enrollment for application accounts."""
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
                                 related_name="admin_otp_device")
     secret = models.CharField(max_length=256)
@@ -99,3 +99,263 @@ class AuditEvent(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+class PlanOrganization(models.Model):
+    ORGANIZATION_TYPES = [("employer", "Employer"), ("tpa", "TPA")]
+    STATUS_CHOICES = [("active", "Active"), ("inactive", "Inactive")]
+
+    organization_name = models.CharField(max_length=200, unique=True)
+    organization_type = models.CharField(max_length=16, choices=ORGANIZATION_TYPES)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="active", db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["organization_name"]
+
+    def __str__(self):
+        return self.organization_name
+
+
+class Plan(models.Model):
+    STATUS_CHOICES = [("active", "Active"), ("inactive", "Inactive")]
+
+    organization = models.ForeignKey(PlanOrganization, on_delete=models.PROTECT, related_name="plans")
+    plan_name = models.CharField(max_length=200)
+    payer_reference = models.CharField(max_length=120, blank=True)
+    plan_reference = models.CharField(max_length=120)
+    effective_start = models.DateField(null=True, blank=True)
+    effective_end = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="active", db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["organization__organization_name", "plan_name"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "plan_reference"], name="plan_org_reference_unique"),
+            models.CheckConstraint(
+                condition=models.Q(effective_end__isnull=True) |
+                          models.Q(effective_start__isnull=True) |
+                          models.Q(effective_end__gte=models.F("effective_start")),
+                name="plan_effective_dates_ordered",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.organization}: {self.plan_name}"
+
+
+class ClaimsSummaryImport(models.Model):
+    STATUSES = [("accepted", "Accepted"), ("rejected", "Rejected")]
+
+    organization = models.ForeignKey(PlanOrganization, on_delete=models.PROTECT, related_name="summary_imports")
+    plan = models.ForeignKey(Plan, on_delete=models.PROTECT, related_name="summary_imports")
+    source_file_name = models.CharField(max_length=255)
+    file_hash = models.CharField(max_length=64, db_index=True)
+    schema_version = models.CharField(max_length=32)
+    imported_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    imported_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,
+                                    related_name="claims_summary_imports")
+    import_status = models.CharField(max_length=16, choices=STATUSES, db_index=True)
+    row_count = models.PositiveIntegerField(default=0)
+    validation_summary = models.JSONField(default=dict, blank=True)
+    source_period = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        ordering = ["-imported_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["plan", "file_hash"], name="summary_import_plan_hash_unique"),
+        ]
+
+    def __str__(self):
+        return f"{self.plan.plan_name}: {self.source_file_name}"
+
+
+class ClaimsSummaryRecord(models.Model):
+    """Approved aggregate only. Raw claims and member identifiers are never stored here."""
+    MEMBER_BANDS = [("11-50", "11-50"), ("51-100", "51-100"), ("100+", "100+")]
+
+    summary_import = models.ForeignKey(ClaimsSummaryImport, on_delete=models.CASCADE,
+                                       related_name="records")
+    plan_reference = models.CharField(max_length=120)
+    hcpcs_code = models.CharField(max_length=5, db_index=True)
+    site_npi = models.CharField(max_length=10, db_index=True)
+    quarter = models.CharField(max_length=6, db_index=True)
+    service_setting = models.CharField(max_length=80, blank=True)
+    total_units = models.DecimalField(max_digits=24, decimal_places=6)
+    total_allowed_amount = models.DecimalField(max_digits=24, decimal_places=6)
+    total_paid_amount = models.DecimalField(max_digits=24, decimal_places=6)
+    member_count_band = models.CharField(max_length=8, choices=MEMBER_BANDS)
+    source_period = models.CharField(max_length=64)
+    extraction_timestamp = models.DateTimeField()
+    schema_version = models.CharField(max_length=32)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["quarter", "hcpcs_code", "site_npi", "service_setting"]
+        constraints = [
+            models.UniqueConstraint(fields=["summary_import", "hcpcs_code", "site_npi", "quarter",
+                                            "service_setting"], name="summary_import_group_unique"),
+            models.CheckConstraint(condition=models.Q(total_units__gt=0), name="summary_units_positive"),
+            models.CheckConstraint(condition=models.Q(total_allowed_amount__gte=0),
+                                   name="summary_allowed_nonnegative"),
+            models.CheckConstraint(condition=models.Q(total_paid_amount__gte=0),
+                                   name="summary_paid_nonnegative"),
+        ]
+        indexes = [
+            models.Index(fields=["summary_import", "quarter", "hcpcs_code"], name="summary_import_code_q_ix"),
+        ]
+
+
+class NetworkRosterEntry(models.Model):
+    NETWORK_STATUSES = [("in_network", "In network"), ("out_of_network", "Out of network")]
+
+    plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name="network_roster")
+    provider_npi = models.CharField(max_length=10, db_index=True)
+    provider_name = models.CharField(max_length=200, blank=True)
+    network_name = models.CharField(max_length=160)
+    network_status = models.CharField(max_length=20, choices=NETWORK_STATUSES)
+    effective_start = models.DateField()
+    effective_end = models.DateField(null=True, blank=True)
+    service_location = models.CharField(max_length=240, blank=True)
+    source_file_name = models.CharField(max_length=255)
+    source_hash = models.CharField(max_length=64)
+    imported_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["provider_npi", "effective_start"]
+        constraints = [
+            models.UniqueConstraint(fields=["plan", "provider_npi", "network_name",
+                                            "effective_start", "service_location"],
+                                    name="network_entry_period_unique"),
+            models.CheckConstraint(condition=models.Q(effective_end__isnull=True) |
+                                   models.Q(effective_end__gte=models.F("effective_start")),
+                                   name="network_effective_dates_ordered"),
+        ]
+        indexes = [models.Index(fields=["plan", "provider_npi", "network_status"],
+                                name="network_plan_npi_status_ix")]
+
+
+class PlanAudit(models.Model):
+    STATUSES = [("draft", "Draft"), ("running", "Running"), ("completed", "Completed"),
+                ("needs_review", "Needs review"), ("failed", "Failed")]
+
+    organization = models.ForeignKey(PlanOrganization, on_delete=models.PROTECT, related_name="plan_audits")
+    plan = models.ForeignKey(Plan, on_delete=models.PROTECT, related_name="audits")
+    summary_import = models.ForeignKey(ClaimsSummaryImport, on_delete=models.PROTECT,
+                                       related_name="audits")
+    audit_name = models.CharField(max_length=200)
+    reporting_period = models.CharField(max_length=64)
+    status = models.CharField(max_length=20, choices=STATUSES, default="draft", db_index=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,
+                                   related_name="plan_audits_created")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    report_generated_at = models.DateTimeField(null=True, blank=True)
+    summary = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["organization", "plan", "status"],
+                                name="audit_org_plan_status_ix")]
+
+
+class PlanAuditResult(models.Model):
+    """Reproducible comparison outputs derived from approved summary and reference data."""
+    plan_audit = models.ForeignKey(PlanAudit, on_delete=models.CASCADE, related_name="results")
+    summary_record = models.ForeignKey(ClaimsSummaryRecord, on_delete=models.PROTECT,
+                                       related_name="audit_results")
+    hcpcs_code = models.CharField(max_length=5, db_index=True)
+    drug_description = models.CharField(max_length=240, blank=True)
+    site_npi = models.CharField(max_length=10, db_index=True)
+    quarter = models.CharField(max_length=6, db_index=True)
+    service_setting = models.CharField(max_length=80, blank=True)
+    total_units = models.DecimalField(max_digits=24, decimal_places=6)
+    total_allowed_amount = models.DecimalField(max_digits=24, decimal_places=6)
+    total_paid_amount = models.DecimalField(max_digits=24, decimal_places=6)
+    member_count_band = models.CharField(max_length=8, choices=ClaimsSummaryRecord.MEMBER_BANDS)
+    plan_allowed_price_per_unit = models.DecimalField(max_digits=24, decimal_places=8, null=True, blank=True)
+    plan_paid_price_per_unit = models.DecimalField(max_digits=24, decimal_places=8, null=True, blank=True)
+    hospital_price_per_unit = models.DecimalField(max_digits=24, decimal_places=8, null=True, blank=True)
+    asp_payment_limit = models.DecimalField(max_digits=24, decimal_places=8, null=True, blank=True)
+    hospital_markup_multiple = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    allowed_markup_multiple = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    paid_markup_multiple = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    plan_to_hospital_price_multiple = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    network_status = models.CharField(max_length=32, default="NETWORK_STATUS_UNKNOWN")
+    data_quality_status = models.CharField(max_length=32, db_index=True)
+    data_quality_notes = models.JSONField(default=list, blank=True)
+    source_references = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["quarter", "hcpcs_code", "site_npi"]
+        constraints = [models.UniqueConstraint(
+            fields=["plan_audit", "hcpcs_code", "site_npi", "quarter", "service_setting"],
+            name="plan_audit_result_group_unique",
+        )]
+        indexes = [models.Index(fields=["plan_audit", "data_quality_status"],
+                                name="audit_result_quality_ix")]
+
+
+class SavingsOpportunity(models.Model):
+    NETWORK_STATUSES = [("IN_NETWORK", "In network"), ("OUT_OF_NETWORK", "Out of network"),
+                        ("NETWORK_STATUS_UNKNOWN", "Network status unknown"),
+                        ("NETWORK_DATA_EXPIRED", "Network data expired")]
+    VALIDATION_STATUSES = [("pending", "Pending validation"), ("validated", "Validated"),
+                           ("not_actionable", "Not actionable")]
+
+    plan_audit = models.ForeignKey(PlanAudit, on_delete=models.CASCADE, related_name="savings_opportunities")
+    hcpcs_code = models.CharField(max_length=5, db_index=True)
+    quarter = models.CharField(max_length=6)
+    service_setting = models.CharField(max_length=80, blank=True)
+    current_site_npi = models.CharField(max_length=10)
+    alternative_site_npi = models.CharField(max_length=10)
+    current_allowed_price_per_unit = models.DecimalField(max_digits=24, decimal_places=8)
+    alternative_allowed_price_per_unit = models.DecimalField(max_digits=24, decimal_places=8)
+    units = models.DecimalField(max_digits=24, decimal_places=6)
+    potential_allowed_savings = models.DecimalField(max_digits=24, decimal_places=6)
+    potential_paid_difference = models.DecimalField(max_digits=24, decimal_places=6, null=True, blank=True)
+    network_status = models.CharField(max_length=32, choices=NETWORK_STATUSES)
+    clinical_review_status = models.CharField(max_length=32, default="pending")
+    validation_status = models.CharField(max_length=24, choices=VALIDATION_STATUSES, default="pending")
+    source_references = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-potential_allowed_savings"]
+        constraints = [
+            models.UniqueConstraint(fields=["plan_audit", "hcpcs_code", "quarter", "service_setting",
+                                            "current_site_npi", "alternative_site_npi"],
+                                    name="savings_opportunity_unique"),
+            models.CheckConstraint(condition=models.Q(potential_allowed_savings__gte=0),
+                                   name="savings_nonnegative"),
+        ]
+
+
+class AuditReview(models.Model):
+    STATUSES = [("submitted", "Submitted"), ("approved", "Approved"), ("rejected", "Rejected")]
+
+    plan_audit = models.ForeignKey(PlanAudit, on_delete=models.CASCADE, related_name="reviews")
+    reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,
+                                 related_name="plan_audit_reviews")
+    review_status = models.CharField(max_length=16, choices=STATUSES, default="submitted")
+    comments = models.CharField(max_length=2000, blank=True)
+    reviewed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-reviewed_at"]
+        constraints = [models.UniqueConstraint(fields=["plan_audit", "reviewer"],
+                                                name="plan_audit_reviewer_unique")]
+
+class PlanOrganizationAccess(models.Model):
+    """Explicit organization boundary for Viewer access to client aggregates."""
+    organization = models.ForeignKey(PlanOrganization, on_delete=models.CASCADE, related_name="user_access")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="plan_organization_access")
+    granted_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,
+                                   related_name="plan_organization_access_granted")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["organization__organization_name", "user__username"]
+        constraints = [models.UniqueConstraint(fields=["organization", "user"],
+                                                name="plan_org_user_access_unique")]

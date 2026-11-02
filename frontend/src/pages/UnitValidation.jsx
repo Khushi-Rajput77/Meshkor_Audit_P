@@ -3,6 +3,7 @@ import { useApi, fmt, postJSON } from "../api.js";
 import { Loading, Table } from "../components.jsx";
 
 export default function UnitValidation({ user }) {
+  const canReview = user?.roles?.some((role) => ["SUPER_ADMIN", "REVIEWER", "Admin"].includes(role));
   const state = useApi("drug-unit-validations");
   const [version, setVersion] = useState(0);
   const scope = useApi("drug-selection-scope", null, [version]);
@@ -53,7 +54,7 @@ export default function UnitValidation({ user }) {
           <select name="status" aria-label={`Review status for ${drug.hcpcs}`} defaultValue="validated"><option value="validated">Validated</option><option value="rejected">Rejected</option><option value="unit_unresolved">Unit unresolved</option></select>
           <input name="clinical_reviewer_name" aria-label={`Clinical reviewer for ${drug.hcpcs}`} placeholder="External pharmacist / clinical reviewer name" defaultValue={drug.unit_review?.clinical_reviewer_name || ""} required minLength={3} />
           <input name="notes" aria-label={`Review note for ${drug.hcpcs}`} placeholder="Evidence and rationale (required for every decision)" required minLength={10} defaultValue={drug.unit_review?.notes || ""} />
-          <button disabled={busy === drug.hcpcs || !user?.roles?.includes("Admin")}>{busy === drug.hcpcs ? "Saving…" : "Record clinical sign-off"}</button>
+          <button disabled={busy === drug.hcpcs || !canReview}>{busy === drug.hcpcs ? "Saving…" : "Record clinical sign-off"}</button>
         </form>
         {messages[drug.hcpcs] && <p className="muted" role="status">{messages[drug.hcpcs]}</p>}
         </article>)}
