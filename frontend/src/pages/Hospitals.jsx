@@ -3,7 +3,7 @@ import { fmt, useApi } from "../api.js";
 import { Loading, MarkupBars, Table } from "../components.jsx";
 
 export default function Hospitals({ user }) {
-  const isAdmin = user?.roles?.includes("Admin");
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
   const h = useApi("hospitals");
   return (
     <Loading state={h}>

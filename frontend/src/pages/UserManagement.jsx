@@ -54,7 +54,7 @@ export default function UserManagement({ user }) {
 
   return <>
     <h1>User management</h1>
-    <p className="lede">Create and manage the two application roles. Admins use Google Authenticator; Viewers can access released reports only.</p>
+    <p className="lede">Manage Super Admin, Analyst, Reviewer, and Client accounts. Every account uses Google Authenticator.</p>
     <section>
       <h2>Create account</h2>
       <form className="source-upload-form" onSubmit={createAccount}>
@@ -62,11 +62,11 @@ export default function UserManagement({ user }) {
         <label>First name<input name="first_name" maxLength={150} /></label>
         <label>Last name<input name="last_name" maxLength={150} /></label>
         <label>Email<input name="email" type="email" maxLength={254} /></label>
-        <label>Role<select name="role" defaultValue="Viewer"><option>Viewer</option><option>Admin</option></select></label>
+        <label>Role<select name="role" defaultValue="CLIENT"><option value="SUPER_ADMIN">Super Admin</option><option value="ANALYST">Analyst</option><option value="REVIEWER">Reviewer</option><option value="CLIENT">Client</option></select></label>
         <label>Initial password<input name="password" type="password" autoComplete="new-password" required minLength={10} /></label>
         <button className="button" disabled={busy === "create"}>{busy === "create" ? "Creating…" : "Create account"}</button>
       </form>
-      <p className="muted">New Admins must enroll an authenticator at first sign-in. At least two active Admin accounts are required to release a report.</p>
+      <p className="muted">Every new account must enroll an authenticator at first sign-in. Report release requires independent review.</p>
       {message && <p role="status" className="success-message">{message}</p>}
       {error && <p role="alert" className="note error">{error}</p>}
     </section>
@@ -81,11 +81,10 @@ export default function UserManagement({ user }) {
         { key: "last_login", label: "Last sign-in", render: (r) => r.last_login ? new Date(r.last_login).toLocaleString() : "Never" },
         { key: "actions", label: "Actions", render: (r) => <div className="account-actions">
           <div className="filters">
-            {!r.roles?.includes("Admin") && <button type="button" disabled={busy === String(r.id)} onClick={() => updateAccount(r, { role: "Admin", is_active: r.is_active })}>Make Admin</button>}
-            {r.roles?.includes("Admin") && r.id !== user?.id && <button type="button" className="secondary" disabled={busy === String(r.id)} onClick={() => updateAccount(r, { role: "Viewer", is_active: r.is_active })}>Make Viewer</button>}
+            {(["SUPER_ADMIN", "ANALYST", "REVIEWER", "CLIENT"]).filter((role) => !r.roles?.includes(role)).map((role) => <button key={role} type="button" className="secondary" disabled={busy === String(r.id)} onClick={() => updateAccount(r, { role, is_active: r.is_active })}>Make {role.replace("_", " ")}</button>)}
             {r.id !== user?.id && <>
               <button type="button" className="secondary" disabled={busy.startsWith("password-")} onClick={() => setResetFor(resetFor === r.id ? null : r.id)}>Reset password</button>
-              <button type="button" className="secondary" disabled={busy === String(r.id)} onClick={() => updateAccount(r, { role: r.roles?.[0] || "Viewer", is_active: !r.is_active })}>{r.is_active ? "Disable" : "Enable"}</button>
+              <button type="button" className="secondary" disabled={busy === String(r.id)} onClick={() => updateAccount(r, { role: r.roles?.[0] || "CLIENT", is_active: !r.is_active })}>{r.is_active ? "Disable" : "Enable"}</button>
             </>}
           </div>
           {resetFor === r.id && <form className="inline-password-reset" onSubmit={(event) => resetPassword(event, r)}>

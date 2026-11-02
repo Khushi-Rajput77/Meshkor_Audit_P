@@ -3,8 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { postJSON, useApi } from "../api.js";
 import { Loading } from "../components.jsx";
 
-function UserAuthenticator({ user }) {
-  if (!user?.roles?.includes("Admin")) return null;
+function UserAuthenticator() {
   const [version, setVersion] = useState(0);
   const [enrollment, setEnrollment] = useState(null);
   const [recoveryCodes, setRecoveryCodes] = useState([]);
@@ -30,7 +29,7 @@ function UserAuthenticator({ user }) {
 
   return <section>
     <h2>Google Authenticator</h2>
-    <p>Every Admin signs in with a rotating authenticator code after the password. Viewer accounts use password sign-in.</p>
+    <p>Every account signs in with a rotating authenticator code after the password.</p>
     <Loading state={otp}>{(state) => <>
       <p>Status: <b>{state.enabled ? "Enabled" : state.setup_pending ? "Setup in progress" : "Off"}</b></p>
       {!state.enabled && !enrollment && <button className="button" type="button" onClick={() => run("setup")} disabled={busy}>Set up Google Authenticator</button>}
@@ -79,13 +78,13 @@ function AdminConfiguration() {
 }
 
 export default function Settings({ user }) {
-  const isAdmin = user?.roles?.includes("Admin");
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
   return <>
     <h1>{isAdmin ? "Application settings" : "Account security"}</h1>
     <p className="lede">{isAdmin
       ? "Read-only project configuration and account security controls. Analytical rules are defined in the versioned project configuration."
-      : "Authenticator verification is required for Admin accounts. Your Viewer account uses password sign-in."}</p>
+      : "Set up and manage the authenticator required for every account."}</p>
     {isAdmin && <AdminConfiguration />}
-    <UserAuthenticator user={user} />
+    <UserAuthenticator />
   </>;
 }

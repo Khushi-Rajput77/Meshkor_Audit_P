@@ -11,13 +11,13 @@ native ASGI application directly.
 |---|---|---|
 | `GET` | `/api/v1/system/health-check/` | Public; checks API, SQLite, and Parquet/DuckDB availability |
 | `GET` | `/api/v1/authentication/csrf-token/` | Public; begins browser sign-in flow |
-| `POST` | `/api/v1/authentication/sign-in/` | Public; password sign-in; Admin accounts receive an OTP enrollment or verification challenge; Viewers sign in without OTP |
+| `POST` | `/api/v1/authentication/sign-in/` | Public; password sign-in; every Admin and Viewer receives an OTP enrollment or verification challenge |
 | `GET` | `/api/v1/authentication/current-user/` | Public; reports current session identity when signed in |
-| `GET` | `/api/v1/authentication/totp/status/` | Authenticated Admin; reads authenticator state |
-| `POST` | `/api/v1/authentication/totp/setup/` | Admin enrollment challenge; returns QR provisioning URI and setup secret |
-| `POST` | `/api/v1/authentication/totp/confirmation/` | Admin enrollment challenge; confirms setup and returns one-time recovery codes |
-| `POST` | `/api/v1/authentication/totp/sign-in-verification/` | Admin challenge; completes sign-in with a TOTP or unused recovery code |
-| `POST` | `/api/v1/authentication/totp/deactivation/` | Retained compatibility endpoint; returns `403`, Admin OTP is mandatory |
+| `GET` | `/api/v1/authentication/totp/status/` | Authenticated Admin or Viewer; reads authenticator state |
+| `POST` | `/api/v1/authentication/totp/setup/` | Admin or Viewer enrollment challenge; returns QR provisioning URI and setup secret |
+| `POST` | `/api/v1/authentication/totp/confirmation/` | Admin or Viewer enrollment challenge; confirms setup and returns one-time recovery codes |
+| `POST` | `/api/v1/authentication/totp/sign-in-verification/` | Admin or Viewer challenge; completes sign-in with a TOTP or unused recovery code |
+| `POST` | `/api/v1/authentication/totp/deactivation/` | Retained compatibility endpoint; returns `403`, TOTP is mandatory for every account |
 | `POST` | `/api/v1/authentication/access-token/refresh/` | Authenticated Django session only; bearer token alone cannot refresh |
 | `POST` | `/api/v1/authentication/sign-out/` | Authenticated; ends the session |
 | `GET`, `POST` | `/api/v1/user-accounts/` | Admin; list accounts or create an Admin/Viewer |

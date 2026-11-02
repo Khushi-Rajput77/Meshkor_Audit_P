@@ -69,6 +69,35 @@ def test_backend_get_route_matrix_returns_expected_success(client):
     assert not failures, "; ".join(failures)
 
 
+@pytest.mark.django_db
+def test_reviewer_can_see_current_draft_needed_for_report_release(client):
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Group
+    from django.test import Client
+    from pricing import data
+    from pricing.models import ReportRecord
+    from pricing.permissions import REVIEWER_GROUP
+
+    builder = get_user_model().objects.get(username="audit-test-admin")
+    report = ReportRecord.objects.create(
+        name="Current test report", status="generated", built_by=builder,
+        source_hash=data.comparison_sha256(), config_hash=data.config_sha256(),
+    )
+    reviewer = get_user_model().objects.create_user(
+        username="release-reviewer", password="test-only-password", is_active=True
+    )
+    reviewer.groups.add(Group.objects.get_or_create(name=REVIEWER_GROUP)[0])
+    reviewer_client = Client()
+    reviewer_client.force_login(reviewer)
+
+    response = reviewer_client.get("/api/v1/reports/")
+    assert response.status_code == 200, response.content
+    assert response.json()[0]["id"] == report.pk
+    assert response.json()[0]["status"] == "generated"
+    assert response.json()[0]["built_by"] == builder.username
+    assert "metadata" not in response.json()[0]
+
+
 def test_protected_analytics_require_authentication(client):
     from django.test import Client
 
@@ -174,10 +203,57 @@ def test_initialize_roles_creates_only_admin_and_viewer_and_user_management_perm
 
 
 @pytest.mark.django_db
-def test_viewer_login_does_not_require_totp(client):
+def test_four_role_backend_permission_matrix():
+    from types import SimpleNamespace
     from django.contrib.auth import get_user_model
     from django.contrib.auth.models import Group
-    from django.test import Client
+    from pricing.permissions import (
+        APPLICATION_ROLES, CanAdminister, CanAnalyze, CanReview, CanView,
+        ADMIN_GROUP, VIEWER_GROUP,
+    )
+
+    User = get_user_model()
+    for role in APPLICATION_ROLES:
+        Group.objects.get_or_create(name=role)
+    expected = {
+        "SUPER_ADMIN": (True, True, True, True),
+        "ANALYST": (True, True, False, False),
+        "REVIEWER": (True, False, False, True),
+        "CLIENT": (False, False, False, False),
+    }
+    for index, (role, decisions) in enumerate(expected.items()):
+        user = User.objects.create_user(username=f"role-{index}", password="role-test-password")
+        user.groups.add(Group.objects.get(name=role))
+        request = SimpleNamespace(user=user, method="POST", path="/api/role-check/")
+        actual = tuple(permission().has_permission(request, None) for permission in
+                       (CanView, CanAnalyze, CanAdminister, CanReview))
+        assert actual == decisions
+
+    legacy_admin = User.objects.create_user(username="legacy-admin", password="legacy-test-password")
+    legacy_admin.groups.add(Group.objects.get_or_create(name=ADMIN_GROUP)[0])
+    legacy_viewer = User.objects.create_user(username="legacy-viewer", password="legacy-test-password")
+    legacy_viewer.groups.add(Group.objects.get_or_create(name=VIEWER_GROUP)[0])
+    admin_request = SimpleNamespace(user=legacy_admin, method="POST", path="/api/role-check/")
+    viewer_request = SimpleNamespace(user=legacy_viewer, method="GET", path="/api/v1/plan-audits/")
+    assert CanAdminister().has_permission(admin_request, None)
+    assert CanView().has_permission(viewer_request, None)
+    assert not CanAnalyze().has_permission(viewer_request, None)
+
+    client_user = User.objects.create_user(username="scoped-client", password="client-test-password")
+    client_user.groups.add(Group.objects.get(name="CLIENT"))
+    client_plan_request = SimpleNamespace(user=client_user, method="GET", path="/api/v1/plan-audits/")
+    client_public_request = SimpleNamespace(user=client_user, method="GET", path="/api/v1/hospitals/")
+    assert CanView().has_permission(client_plan_request, None)
+    assert not CanView().has_permission(client_public_request, None)
+
+
+@pytest.mark.django_db
+def test_viewer_login_requires_totp_enrollment_and_second_factor(client):
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Group
+    from django.test import Client, override_settings
+    import time
+    from pricing.otp import code_at
 
     user = get_user_model().objects.create_user(
         username="jwt-viewer", password="long-test-password-123", is_active=True
@@ -185,22 +261,46 @@ def test_viewer_login_does_not_require_totp(client):
     from pricing.permissions import VIEWER_GROUP
     user.groups.add(Group.objects.get_or_create(name=VIEWER_GROUP)[0])
     fresh_client = Client()
-    response = fresh_client.post("/api/v1/authentication/sign-in/", {
-        "username": "jwt-viewer", "password": "long-test-password-123",
-    }, content_type="application/json")
-    assert response.status_code == 200
-    assert "no-store" in response.headers.get("Cache-Control", "")
-    assert response.json()["token_type"] == "Bearer"
-    assert "otp_required" not in response.json()
-    assert "otp_setup_required" not in response.json()
-    token = response.json()["access"]
-    current_user = fresh_client.get(
-        "/api/v1/authentication/current-user/", HTTP_AUTHORIZATION=f"Bearer {token}")
-    assert current_user.json()["authenticated"]
+    with override_settings(TOTP_ENCRYPTION_KEY="F5wrMMH6I5kTnhPaaWqFvxLQmNY4J5kmWh0-e4jxQYc="):
+        response = fresh_client.post("/api/v1/authentication/sign-in/", {
+            "username": "jwt-viewer", "password": "long-test-password-123",
+        }, content_type="application/json")
+        assert response.status_code == 200
+        assert response.json()["otp_setup_required"] is True
+        assert "access" not in response.json()
+        challenge = response.json()["challenge"]
+        setup = fresh_client.post("/api/v1/authentication/totp/setup/", {
+            "challenge": challenge,
+        }, content_type="application/json")
+        assert setup.status_code == 200
+        assert "no-store" in setup.headers.get("Cache-Control", "")
+        code, _ = code_at(setup.json()["secret"])
+        confirmation = fresh_client.post("/api/v1/authentication/totp/confirmation/", {
+            "challenge": challenge, "code": code,
+        }, content_type="application/json")
+        assert confirmation.status_code == 200
+        assert confirmation.json()["user"]["roles"] == [VIEWER_GROUP]
+        assert len(confirmation.json()["recovery_codes"]) == 10
+
+        next_client = Client()
+        password_response = next_client.post("/api/v1/authentication/sign-in/", {
+            "username": "jwt-viewer", "password": "long-test-password-123",
+        }, content_type="application/json")
+        assert password_response.json()["otp_required"] is True
+        next_code, _ = code_at(setup.json()["secret"], time.time() + 30)
+        verified = next_client.post("/api/v1/authentication/totp/sign-in-verification/", {
+            "challenge": password_response.json()["challenge"], "code": next_code,
+        }, content_type="application/json")
+        assert verified.status_code == 200
+        assert "no-store" in verified.headers.get("Cache-Control", "")
+        current_user = next_client.get(
+            "/api/v1/authentication/current-user/",
+            HTTP_AUTHORIZATION=f"Bearer {verified.json()['access']}")
+        assert current_user.json()["authenticated"]
 
 
 @pytest.mark.django_db
-def test_admin_can_reset_viewer_password_and_viewer_can_sign_in(client):
+def test_admin_can_reset_viewer_password_and_viewer_must_enroll_totp(client):
     from django.contrib.auth import get_user_model
     from django.contrib.auth.hashers import check_password
     from django.contrib.auth.models import Group
@@ -224,8 +324,7 @@ def test_admin_can_reset_viewer_password_and_viewer_can_sign_in(client):
         "username": viewer.username, "password": new_password,
     }, content_type="application/json")
     assert signed_in.status_code == 200
-    assert signed_in.json()["user"]["roles"] == [VIEWER_GROUP]
-    assert "otp_required" not in signed_in.json()
+    assert signed_in.json()["otp_setup_required"] is True
 
 
 @pytest.mark.django_db
@@ -325,6 +424,15 @@ def test_rates_filter_and_sort(client):
     # unsafe sort value falls back to markup_multiple
     assert client.get("/api/rates", {"sort": "1; DROP TABLE x"}).status_code == 200
     assert client.get("/api/rates", {"limit": "many"}).status_code == 400
+
+
+def test_comparison_payer_filter_options_come_from_parquet(client):
+    options = client.get("/api/v1/hospital-drug-price-comparisons/filter-options/")
+    rows = client.get("/api/v1/hospital-drug-price-comparisons/", {"limit": 1000})
+    assert options.status_code == 200, options.content
+    assert rows.status_code == 200, rows.content
+    actual = sorted({row["payer_group"] for row in rows.json()["rows"] if row.get("payer_group")})
+    assert options.json()["payer_groups"] == actual
 
 
 def test_invalid_pagination_is_a_client_error(client):

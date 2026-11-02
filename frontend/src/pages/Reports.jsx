@@ -9,8 +9,12 @@ export default function Reports({ user }) {
   const [downloading, setDownloading] = useState(false);
   const [downloadingXlsx, setDownloadingXlsx] = useState(false);
   const [downloadingCsv, setDownloadingCsv] = useState(false);
-  const isAdmin = user?.roles?.includes("Admin");
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
+  const canRelease = user?.roles?.some((role) => ["SUPER_ADMIN", "REVIEWER", "Admin"].includes(role));
+  const canReviewReports = user?.roles?.some((role) => ["SUPER_ADMIN", "ANALYST", "REVIEWER", "Admin"].includes(role));
   const reports = useApi("reports", null, [version]);
+  const currentReportReleased = reports.data?.some((report) => report.status === "released");
+  const canDownload = isAdmin || currentReportReleased;
 
   async function release() {
     setError(""); setMessage("");
@@ -58,22 +62,24 @@ export default function Reports({ user }) {
     <h1>Reports & Exports</h1>
     <p className="lede">{isAdmin
       ? "Review draft reports, record an independent release, and export the supporting detail."
-      : "Download the current released Ohio market report and its CSV data appendix."}</p>
+      : canReviewReports
+        ? "Track current report builds. Reviewers can release a completed report; downloads are available after release."
+        : "Download the current released Ohio market report and its CSV data appendix."}</p>
     <section>
       <h2>Current market report</h2>
       <p className="muted">Prices shown are posted hospital rates; they do not represent plan claims, acquisition costs, or guaranteed savings. Unit review status is shown in the underlying tables.</p>
       <div className="filters">
-        <button type="button" className="button" onClick={handleDownload} disabled={downloading}>
-          {downloading ? "Generating PDF…" : "Download PDF Report"}
+        <button type="button" className="button" onClick={handleDownload} disabled={downloading || !canDownload}>
+          {downloading ? "Generating PDF…" : canDownload ? "Download PDF Report" : "PDF available after release"}
         </button>
-        <button type="button" className="button secondary" onClick={handleCsvDownload} disabled={downloadingCsv}>
-          {downloadingCsv ? "Preparing appendix…" : "Download CSV Appendix"}
+        <button type="button" className="button secondary" onClick={handleCsvDownload} disabled={downloadingCsv || !canDownload}>
+          {downloadingCsv ? "Preparing appendix…" : canDownload ? "Download CSV Appendix" : "CSV available after release"}
         </button>
-        {isAdmin && <>
-          <button type="button" className="button secondary" onClick={handleXlsxDownload} disabled={downloadingXlsx}>
-            {downloadingXlsx ? "Generating workbook…" : "Download Admin Excel Export"}
-          </button>
-          <button type="button" onClick={release} disabled={reports.data?.[0]?.status !== "generated"}>
+        {isAdmin && <button type="button" className="button secondary" onClick={handleXlsxDownload} disabled={downloadingXlsx}>
+          {downloadingXlsx ? "Generating workbook…" : "Download Admin Excel Export"}
+        </button>}
+        {canRelease && <>
+          <button type="button" onClick={release} disabled={!reports.data?.some((report) => report.status === "generated")}>
             Release current report
           </button>
         </>}

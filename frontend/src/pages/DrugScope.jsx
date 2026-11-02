@@ -2,7 +2,7 @@ import { useApi, fmt } from "../api.js";
 import { Loading, Table } from "../components.jsx";
 
 export default function DrugScope({ user }) {
-  const isAdmin = user?.roles?.includes("Admin");
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
   const state = useApi("drug-selection-scope");
   const columns = [
     { key: "spend_rank", label: "Spend rank", num: true }, { key: "hcpcs", label: "HCPCS" },

@@ -5,14 +5,14 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.core.management.base import BaseCommand
 
-from pricing.permissions import ADMIN_GROUP, VIEWER_GROUP
+from pricing.permissions import ADMIN_GROUP, VIEWER_GROUP, APPLICATION_ROLES
 
 
 class Command(BaseCommand):
     help = "Create the application's built-in authorization groups."
 
     def handle(self, *args, **options):
-        for name in (ADMIN_GROUP, VIEWER_GROUP):
+        for name in (*APPLICATION_ROLES, ADMIN_GROUP, VIEWER_GROUP):
             _, created = Group.objects.get_or_create(name=name)
             self.stdout.write(f"{'Created' if created else 'Ready'} role: {name}")
         admin_group = Group.objects.get(name=ADMIN_GROUP)

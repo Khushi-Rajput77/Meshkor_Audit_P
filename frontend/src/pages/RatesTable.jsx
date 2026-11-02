@@ -4,12 +4,11 @@ import { csvUrl, fmt, getJSON, PRICE_TYPE_TEXT, STATUS_TEXT } from "../api.js";
 import { StatusPill } from "../components.jsx";
 
 const PAGE = 50;
-const PAYERS = ["", "Anthem", "UnitedHealthcare", "Aetna", "Cigna", "Medical Mutual", "Humana",
-  "CareSource", "Molina", "Medicare Advantage", "Medicaid MCO", "Other", "Not stated", "All payers"];
-
 /** Server-side filtered, sorted, paged rate table with CSV export. */
 export default function RatesTable({ fixed = {}, user }) {
-  const isAdmin = user?.roles?.includes("Admin");
+  const isAdmin = user?.roles?.some((role) => ["SUPER_ADMIN", "Admin"].includes(role));
+  const canReviewAllStatuses = user?.roles?.some((role) => ["SUPER_ADMIN", "ANALYST", "Admin"].includes(role));
+  const [payerGroups, setPayerGroups] = useState([]);
   const [searchParams] = useSearchParams();
   const [f, setF] = useState({ price_type: "", status: "", payer_group: "", q: "" });
   const [sort, setSort] = useState({ sort: "markup_multiple", order: "desc" });
@@ -19,6 +18,14 @@ export default function RatesTable({ fixed = {}, user }) {
   const key = JSON.stringify(params);
 
   useEffect(() => { setF((old) => ({ ...old, q: searchParams.get("q") || "" })); }, [searchParams]);
+
+  useEffect(() => {
+    let live = true;
+    getJSON("hospital-drug-price-comparisons/filter-options")
+      .then((data) => live && setPayerGroups(data.payer_groups || []))
+      .catch(() => live && setPayerGroups([]));
+    return () => { live = false; };
+  }, []);
 
   useEffect(() => { setOffset(0); }, [key]);
   useEffect(() => {
@@ -46,12 +53,13 @@ export default function RatesTable({ fixed = {}, user }) {
           <option value="">All price types</option>
           {Object.entries(PRICE_TYPE_TEXT).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        {isAdmin && <select value={f.status} onChange={set("status")}>
+        {canReviewAllStatuses && <select value={f.status} onChange={set("status")}>
           <option value="">All statuses</option>
           {Object.entries(STATUS_TEXT).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>}
         <select value={f.payer_group} onChange={set("payer_group")}>
-          {PAYERS.map((p) => <option key={p} value={p}>{p || "All payer groups"}</option>)}
+          <option value="">All payer groups</option>
+          {payerGroups.map((payer) => <option key={payer} value={payer}>{payer}</option>)}
         </select>
         <input placeholder="Search hospital, payer, plan, description" value={f.q}
           onChange={set("q")} />
@@ -99,7 +107,8 @@ export default function RatesTable({ fixed = {}, user }) {
                 <td className="num">{r.negotiated_percentage == null ? "—" : `${r.negotiated_percentage}%`}</td>
                 <td className="num">{[r.median_amount, r.p10_amount, r.p90_amount].some((v) => v != null)
                   ? `${fmt.usd(r.median_amount)} / ${fmt.usd(r.p10_amount)}–${fmt.usd(r.p90_amount)}` : "—"}</td>
-                <td className="num">{r.billing_units == null ? "—" : +r.billing_units.toFixed(3)}</td>
+                <td className="num">{r.billing_units == null || !Number.isFinite(Number(r.billing_units))
+                  ? "—" : Number(r.billing_units).toFixed(3)}</td>
                 <td className="num">{fmt.usd(r.price_per_billing_unit)}</td>
                 <td className="num">{fmt.usd(r.asp_payment_limit)}
                   <div className="muted">{r.benchmark_quarter}</div></td>

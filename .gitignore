@@ -60,3 +60,13 @@ ENV/
 .DS_Store
 Thumbs.db
 Desktop.ini
+# Employer/TPA-side claims and plan configuration; never commit client records or identifiers.
+client_extractor/input/
+client_extractor/output/
+client_extractor/logs/
+client_extractor/.venv/
+client_extractor/config/client_config.yaml
+client_extractor/**/*.csv
+client_extractor/**/*.xlsx
+client_extractor/**/*.xlsm
+client_extractor/**/*.837

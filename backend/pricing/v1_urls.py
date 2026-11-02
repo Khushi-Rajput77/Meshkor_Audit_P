@@ -41,6 +41,8 @@ urlpatterns = [
     path("hospitals/<str:hospital_key>/", views.hospital_detail, name="hospital_detail"),
     path("medicare-part-b-drugs/", views.drugs, name="medicare_part_b_drug_catalog"),
     path("medicare-part-b-drugs/<str:hcpcs>/", views.drug_detail, name="medicare_part_b_drug_detail"),
+    path("hospital-drug-price-comparisons/filter-options/", views.rate_filter_options,
+         name="hospital_drug_price_comparison_filter_options"),
     path("hospital-drug-price-comparisons/", views.rates, name="hospital_drug_price_comparisons"),
     path("hospital-drug-price-comparisons/exports/csv/", views.rates_csv,
          name="hospital_drug_price_comparisons_csv_export"),

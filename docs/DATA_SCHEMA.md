@@ -22,7 +22,7 @@ CMS Part B source checksum.
 | `ProcessingJob` | Job type, progress, status, requesting user, timestamps, summary, and error | Admin import/report actions |
 | `ReportRecord` | Report status, comparison/config checksums, builder, approver, and release metadata | Report build and independent Admin release |
 | `DrugUnitReview` | HCPCS, selected-scope checksum, reviewed unit, external clinical reviewer, decision, notes, and Admin recorder | Admin review tied to the current selected scope |
-| `AdminOTPDevice` | Encrypted TOTP seed, enabled state, replay-prevention step, and hashed recovery codes | Admin Google Authenticator enrollment |
+| `AdminOTPDevice` | Encrypted TOTP seed, enabled state, replay-prevention step, and hashed recovery codes | Admin and Viewer Google Authenticator enrollment |
 | `AuditEvent` | Actor, action, entity, safe metadata, and timestamp | Sign-in, data access, import, review, account, and release events |
 
 Passwords use Django's password hashers. Authenticator seeds are encrypted at
