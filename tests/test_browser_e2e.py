@@ -188,13 +188,15 @@ def _upload_summary(page, summary, manifest):
     page.get_by_text("Approved aggregate summary imported.").wait_for()
 
 
-def test_rg01_browser_workflow_and_authorization(browser_app, built, tmp_path, settings, request):
+def test_rg01_browser_workflow_and_authorization(browser_app, built, tmp_path, settings, request, monkeypatch):
     """Exercise MFA, tenant scoping, audit lifecycle, downloads, revocation and responsive UI."""
     import hashlib
+    from decimal import Decimal
     from django.contrib.auth import get_user_model
     from pricing.models import (ClaimsSummaryImport, Plan, PlanAudit, PlanOrganization,
                                 PlanOrganizationAccess)
     from pipeline import build_compare, select_drugs
+    from pricing import plan_audit_engine
 
     origin, backend_url = browser_app
     # The fixture must never point at the configured operational DB.
@@ -202,6 +204,26 @@ def test_rg01_browser_workflow_and_authorization(browser_app, built, tmp_path, s
     assert settings.DATABASES["default"]["NAME"] != operational_db
     assert settings.DATABASES["default"]["NAME"] != str(settings.OPERATIONAL_DB_PATH)
     print("Using isolated test database:", settings.DATABASES["default"]["NAME"])
+
+    monkeypatch.setattr(
+        plan_audit_engine,
+        "_hospital_rows",
+        lambda codes, quarters: (
+            {
+                ("J9271", "1000000004", "2026Q4", "outpatient_hospital"): {
+                    "price": Decimal("180"),
+                    "source_file": "synthetic-hospital.csv",
+                    "source_sha256": "b" * 64,
+                },
+                ("J9271", "1000000012", "2026Q4", "outpatient_hospital"): {
+                    "price": Decimal("120"),
+                    "source_file": "synthetic-hospital.csv",
+                    "source_sha256": "b" * 64,
+                },
+            } if "J9271" in codes else {},
+            0,
+        ),
+    )
 
     run_tag = secrets.token_hex(4)
     admin_name = f"rg01-admin-{run_tag}"
@@ -326,7 +348,7 @@ def test_rg01_browser_workflow_and_authorization(browser_app, built, tmp_path, s
 
         # Clinical reviewer records a CMS-bound synthetic decision through the UI.
         reviewer_page.goto(origin + "/drug-unit-validations")
-        reviewer_page.get_by_role("heading", name="Unit validation").wait_for()
+        reviewer_page.get_by_role("heading", name="Unit validation", exact=True).wait_for()
         drug_card = reviewer_page.locator("article.review-card").filter(has_text="J9271")
         drug_card.wait_for()
         drug_card.get_by_label("Review status for J9271").select_option("validated")
@@ -414,7 +436,7 @@ def test_rg01_browser_workflow_and_authorization(browser_app, built, tmp_path, s
         analyst_page.get_by_role("button", name="Run audit").click()
         analyst_page.get_by_text("Audit run finished.", exact=False).wait_for()
         analyst_page.get_by_role("tab", name="Drug Cost Analysis").click()
-        analyst_page.get_by_text("Not comparable", exact=True).wait_for()
+        analyst_page.get_by_text("Not comparable", exact=True).first.wait_for()
         assert _api(analyst_page, f"/api/v1/plan-audits/{unresolved_audit.pk}/approve/",
                     method="POST", body={})["status"] in {403, 400}
 

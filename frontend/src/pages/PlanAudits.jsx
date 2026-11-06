@@ -1210,7 +1210,8 @@ function PlanSetupSection({
                 return;
               }
               act(async () => {
-                await uploadPlanSummary(organizationId, planId, form.get("summary"), form.get("manifest"));
+                const imported = await uploadPlanSummary(organizationId, planId, form.get("summary"), form.get("manifest"));
+                if (imported?.id) setImportId(String(imported.id));
                 element.reset(); setSummaryPreview(null);
               }, "Approved aggregate summary imported.");
             }}
@@ -1317,7 +1318,7 @@ function PlanSetupSection({
                 const item = await postJSON("plan-audits/create/", {
                   organization_id: organizationId,
                   plan_id: planId,
-                  summary_import_id: importId,
+                  summary_import_id: form.get("summary_import_id") || importId,
                   audit_name: form.get("audit_name"),
                   reporting_period: form.get("reporting_period"),
                 });
@@ -1326,6 +1327,23 @@ function PlanSetupSection({
               }, "Plan audit created.");
             }}
           >
+            {imports.length > 1 && (
+              <label className="plan-audit-field">
+                Summary import
+                <select
+                  name="summary_import_id"
+                  value={importId}
+                  onChange={(e) => setImportId(e.target.value)}
+                  required
+                >
+                  {imports.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.source_file_name} ({item.source_period || "no period"}; {item.import_status})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <Field name="audit_name" label="Audit name" maxLength="200" required />
             <Field
               name="reporting_period"
